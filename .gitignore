@@ -1,0 +1,8 @@
+node_modules/
+.scratch/
+.env
+.env.*
+!.env.example
+*.log
+# Throwaway evidence is committed only on prototype/collaboration-model.
+prototypes/collaboration/
