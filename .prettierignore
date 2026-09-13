@@ -1,0 +1,8 @@
+.agents
+.scratch
+prototypes
+node_modules
+dist
+test-results
+playwright-report
+package-lock.json

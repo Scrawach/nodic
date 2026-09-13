@@ -6,3 +6,6 @@ node_modules/
 *.log
 # Throwaway evidence is committed only on prototype/collaboration-model.
 prototypes/collaboration/
+dist/
+test-results/
+playwright-report/
