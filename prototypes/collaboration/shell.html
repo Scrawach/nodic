@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nodic · совместное редактирование</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f5f2;color:#242b27;font:15px/1.55 system-ui,sans-serif}main{max-width:1160px;margin:auto;padding:40px 28px}header{max-width:860px}small,.muted{color:#64716a}h1{font-size:36px;letter-spacing:-1.2px;margin:8px 0}h2{font-size:18px;margin:0 0 12px}p{margin:8px 0 18px}.eyebrow{color:#29724f;letter-spacing:2px;font-size:12px;font-weight:700}.notice{border-left:3px solid #84a88e;padding:8px 15px;background:#edf1eb}.toolbar,.buttons,.tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center}button{font:inherit;font-size:13px;border:1px solid #cbd3cd;border-radius:7px;padding:8px 12px;background:white;color:#243e30;cursor:pointer}button:hover{background:#edf4ee}button:disabled{opacity:.45;cursor:default}button.selected,.primary{background:#285f44;color:white;border-color:#285f44}.toolbar{margin:25px 0 18px}.status{margin-left:auto;font-size:13px}.clients{display:grid;grid-template-columns:1fr 1fr;gap:18px}.panel{background:white;border:1px solid #dce2db;border-radius:12px;padding:22px}.person{display:flex;justify-content:space-between;align-items:center}.badge{background:#eef3ed;padding:3px 9px;border-radius:20px;font-size:12px}label{display:block;font-size:13px;color:#5c6b61;margin-bottom:7px}textarea{font:17px/1.6 system-ui,sans-serif;width:100%;min-height:135px;resize:vertical;border:1px solid #cbd3cd;border-radius:8px;padding:12px;margin-bottom:12px;color:#213429}textarea:focus{outline:2px solid #88b497}textarea:disabled{background:#f4f4f1}.facts{display:flex;gap:20px;margin:16px 0;color:#64716a;font-size:13px}.state{margin-top:18px}.flow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}.node{border:1px solid #b8cabc;padding:8px 15px;border-radius:6px;background:#f6f9f4}.deleted{opacity:.4;text-decoration:line-through}.connections{font-size:14px}.walkthrough{margin-top:25px}.tabs{margin:14px 0}.steps{display:flex;gap:8px;flex-wrap:wrap}#scenario-description{max-width:850px}.journal{margin-top:18px}ol{padding-left:22px;font-size:13px;color:#516057}li{padding:3px 0}details{margin-top:18px;font-size:13px}footer{margin-top:25px;color:#68736c;font-size:12px}@media(max-width:700px){.clients{grid-template-columns:1fr}main{padding:22px 16px}h1{font-size:28px}.status{margin-left:0}}
+</style>
+<main>
+<header><div class="eyebrow">NODIC / ЛАБОРАТОРИЯ 01</div><h1>Два автора. Одна реплика.</h1>
+<p>Проверяем: объединяется ли одновременный ввод, сохраняются ли чужие изменения при отмене и остаётся ли граф допустимым при конфликте связей.</p>
+<p class="notice">Технический прототип, не макет редактора. Две копии Yjs настоящие; сервер и доставка сообщений моделируются в памяти одной страницы. После перезагрузки данные исчезнут.</p></header>
+<div class="toolbar"><button id="reset">Сбросить стенд</button><button id="delivery">Задержать доставку</button><button id="flush">Доставить изменения</button><span class="status" id="network"></span></div>
+<section class="clients">
+<article class="panel"><div class="person"><h2>Аня</h2><span id="presence-0" class="badge"></span></div><label for="text-0">Реплика в её копии</label><textarea id="text-0"></textarea><div class="buttons"><button id="append-0">Добавить «Привет!»</button><button id="undo-0">Отменить</button><button id="redo-0">Повторить</button><button id="move-0">Сдвинуть ноду</button><button id="delete-0">Удалить ноду</button><button id="online-0">Отключить связь</button></div><div class="facts" id="facts-0"></div></article>
+<article class="panel"><div class="person"><h2>Борис</h2><span id="presence-1" class="badge"></span></div><label for="text-1">Реплика в его копии</label><textarea id="text-1"></textarea><div class="buttons"><button id="append-1">Добавить «Куда идёшь?»</button><button id="undo-1">Отменить</button><button id="redo-1">Повторить</button><button id="move-1">Сдвинуть ноду</button><button id="delete-1">Удалить ноду</button><button id="online-1">Отключить связь</button></div><div class="facts" id="facts-1"></div></article>
+</section>
+<section class="panel state"><h2>Принятое общее состояние</h2><div class="flow"><span class="node">Начало</span><span>→</span><span class="node" id="line-node">Реплика</span><span class="node">◇ Остаться</span><span class="node">◇ Уйти</span><span class="node">Конец</span></div><div id="graph-state"></div><p id="server-text"></p><div class="connections" id="edges"></div><p id="queue" class="muted"></p><div class="buttons"><button id="request-direct">Аня: реплика → конец</button><button id="request-choice">Борис: реплика → вариант</button><button id="process">Обработать запросы связей</button></div></section>
+<section class="walkthrough"><h2>Пройдите спорные ситуации</h2><div class="tabs" id="tabs"></div><p id="scenario-description"></p><div class="steps" id="steps"></div><p id="progress" class="muted"></p></section>
+<section class="panel journal"><h2>Что произошло</h2><ol id="events"></ol></section>
+<details><summary>Границы этого прототипа</summary><p>Нет настоящего WebSocket, базы данных, проверки прав или редактора доски. Не проверены курсоры внутри текста, IME, нагрузка, перезапуск сервера и единая история сложных составных действий. Повтор удаления пока не реализован. Задержка доставки — эксперимент с сообщениями в пути, а не обещание офлайн-редактирования.</p></details>
+<footer>Yjs __VERSION__ · Данные в памяти · Открывается без сервера и подключения к интернету</footer>
+</main>
+<script type="module">
+/* __VENDOR__ */
+/* __MODEL__ */
+let demo = new CollaborationDemo();
+let active = 0, completed = 0;
+const el = id => document.getElementById(id);
+function render() {
+  const s = demo.snapshot();
+  for (let i = 0; i < 2; i++) {
+    const c = s.clients[i], input = el(`text-${i}`);
+    if (input.value !== c.text) { const start = input.selectionStart, end = input.selectionEnd; input.value = c.text; input.setSelectionRange(Math.min(start, c.text.length), Math.min(end, c.text.length)); }
+    input.disabled = !c.online || !s.alive;
+    el(`presence-${i}`).textContent = c.online ? 'На связи' : 'Нет соединения';
+    el(`online-${i}`).textContent = c.online ? 'Отключить связь' : 'Подключиться';
+    el(`facts-${i}`).textContent = `Своих действий: ${c.undo} · Для повтора: ${c.redo}`;
+    el(`undo-${i}`).disabled = !c.online || !c.undo;
+    el(`redo-${i}`).disabled = !c.online || !c.redo;
+    for (const action of ['append', 'move', 'delete']) el(`${action}-${i}`).disabled = !c.online || !s.alive;
+  }
+  el('network').textContent = `В пути: ${s.pending} · ${demo.automatic ? 'Автодоставка' : 'Доставка задержана'}`;
+  el('delivery').textContent = demo.automatic ? 'Задержать доставку' : 'Включить автодоставку';
+  el('line-node').className = `node ${s.alive ? '' : 'deleted'}`;
+  el('graph-state').textContent = `Реплика: ${s.alive ? 'на доске' : 'удалена'} · Условная позиция: ${s.position}`;
+  el('server-text').textContent = `Принятый текст${s.alive ? '' : ' (скрыт до восстановления)'}: «${s.serverText}»`;
+  el('edges').textContent = 'Связи: ' + (s.edges.map(e => `${demo.nodes[e.from].name} → ${demo.nodes[e.to].name}`).join(' · ') || 'нет');
+  el('queue').textContent = `Запросов связей в очереди: ${s.commands}`;
+  el('events').replaceChildren(...s.events.map(e => { const li = document.createElement('li'); li.textContent = e; return li; }));
+  document.querySelectorAll('#steps button').forEach((button, index) => { button.disabled = index !== completed; button.className = index === completed ? 'primary' : ''; });
+  el('progress').textContent = completed === scenarios[active].steps.length ? 'Сценарий завершён. Сравните копии авторов и журнал.' : `Шаг ${completed + 1} из ${scenarios[active].steps.length}`;
+}
+function choose(index) {
+  demo.destroy(); demo = new CollaborationDemo(); active = index; completed = 0;
+  el('tabs').replaceChildren(...scenarios.map((s, i) => { const b = document.createElement('button'); b.textContent = s.title; b.className = i === active ? 'selected' : ''; b.onclick = () => choose(i); return b; }));
+  el('scenario-description').textContent = scenarios[index].description;
+  el('steps').replaceChildren(...scenarios[index].steps.map(([title, action], i) => { const b = document.createElement('button'); b.textContent = `${i + 1}. ${title}`; b.onclick = () => { action(demo); completed++; render(); }; return b; }));
+  render();
+}
+for (let i = 0; i < 2; i++) {
+  el(`text-${i}`).addEventListener('input', event => { if (!event.isComposing) { demo.edit(i, event.target.value); render(); } });
+  el(`text-${i}`).addEventListener('compositionend', event => { demo.edit(i, event.target.value); render(); });
+  for (const action of ['undo', 'redo', 'move']) el(`${action}-${i}`).onclick = () => { demo[action](i); render(); };
+  el(`append-${i}`).onclick = () => { demo.append(i, i === 0 ? ' Привет!' : ' Куда идёшь?'); render(); };
+  el(`delete-${i}`).onclick = () => { demo.remove(i); render(); };
+  el(`online-${i}`).onclick = () => { demo.setOnline(i, !demo.clients[i].online); render(); };
+}
+el('reset').onclick = () => choose(active);
+el('delivery').onclick = () => { demo.automatic = !demo.automatic; if (demo.automatic) demo.deliver(); render(); };
+el('flush').onclick = () => { demo.deliver(); render(); };
+el('request-direct').onclick = () => { demo.queueConnection(0, 'line', 'end'); render(); };
+el('request-choice').onclick = () => { demo.queueConnection(1, 'line', 'a'); render(); };
+el('process').onclick = () => { demo.processConnections(); render(); };
+choose(0);
+</script>
+</html>
