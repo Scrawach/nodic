@@ -243,3 +243,71 @@ test('a project invitation does not give access to another project', async () =>
     ).statusCode,
   ).toBe(403);
 });
+
+test('moves are atomic, shared, persistent and retries cannot overwrite a later move', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Moving' } })
+  ).json();
+  currentDialogue = project.dialogueId;
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.editorToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  const read = async () =>
+    (await app.inject({ url: `/api/dialogues/${currentDialogue}`, headers: { cookie } })).json();
+  const initial = await read();
+  const nodeId = initial.nodes[0].id;
+  const a = connect(cookie),
+    b = connect(cookie);
+  try {
+    await Promise.all([a.next('ready'), b.next('ready')]);
+    const first = {
+      type: 'move-nodes',
+      operationId: crypto.randomUUID(),
+      positions: [{ nodeId, x: 250, y: -80 }],
+    };
+    a.send(first);
+    await a.next('saved');
+    expect(await b.next('positions')).toMatchObject({ positions: first.positions });
+    expect((await read()).nodes[0]).toMatchObject({ x: 250, y: -80 });
+    b.send({ ...first, operationId: crypto.randomUUID(), positions: [{ nodeId, x: 500, y: 300 }] });
+    await b.next('saved');
+    a.send(first);
+    await a.next('saved');
+    expect((await read()).nodes[0]).toMatchObject({ x: 500, y: 300 });
+    a.send({ ...first, positions: [{ nodeId, x: 999, y: 999 }] });
+    expect(await a.next('error')).toMatchObject({ operationId: first.operationId });
+    // One inaccessible member rejects the entire group, including preceding valid members.
+    a.send({
+      ...first,
+      operationId: crypto.randomUUID(),
+      positions: [
+        { nodeId, x: 1, y: 2 },
+        { nodeId: crypto.randomUUID(), x: 3, y: 4 },
+      ],
+    });
+    await a.next('error');
+    expect((await read()).nodes[0]).toMatchObject({ x: 500, y: 300 });
+    a.socket.close();
+    b.socket.close();
+    await app.close();
+    app = await createApp();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const reopened = connect(cookie);
+    try {
+      expect(await reopened.next('ready')).toMatchObject({
+        nodes: [{ id: nodeId, x: 500, y: 300 }],
+      });
+      reopened.send(first);
+      await reopened.next('saved');
+      expect((await read()).nodes[0]).toMatchObject({ x: 500, y: 300 });
+    } finally {
+      reopened.socket.terminate();
+    }
+  } finally {
+    a.socket.terminate();
+    b.socket.terminate();
+  }
+});

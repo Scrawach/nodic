@@ -58,3 +58,40 @@ test('two browser sessions edit one reply and undo only their own text', async (
     await contextB.close();
   }
 });
+
+test('dragging a node is shared and survives reload', async ({ page, browser }) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Moving nodes');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const link = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await other.goto(link);
+    await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
+    const node = page.locator('.react-flow__node').first();
+    const peerNode = other.locator('.react-flow__node').first();
+    const transform = (target: typeof node) =>
+      target.evaluate((element) => (element as HTMLElement).style.transform);
+    const before = await transform(node);
+    const box = await page.getByTestId('node-start').boundingBox();
+    if (!box) throw new Error('Start node is not visible');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 70, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(() => transform(node)).not.toBe(before);
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    const position = await transform(node);
+    await expect.poll(() => transform(peerNode)).toBe(position);
+    await page.reload();
+    await expect.poll(() => transform(node)).toBe(position);
+    await page.context().setOffline(true);
+    await expect(page.getByTestId('save-status')).toHaveText('Нет соединения');
+    await expect(node).not.toHaveClass(/draggable/);
+  } finally {
+    await context.close();
+  }
+});

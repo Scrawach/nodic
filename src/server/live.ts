@@ -72,8 +72,41 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
           let operationId: string | undefined;
           try {
             const message = clientMessage.parse(JSON.parse(raw.toString()));
-            if (message.type === 'text-update') operationId = message.operationId;
-            if (message.type === 'open-text') {
+            if ('operationId' in message) operationId = message.operationId;
+            if (message.type === 'move-nodes') {
+              const changed = await transaction(pool, async (client) => {
+                await client.query('SELECT id FROM dialogues WHERE id=$1 FOR UPDATE', [dialogueId]);
+                const payloadHash = hash(JSON.stringify(message.positions));
+                const prior = await client.query(
+                  'SELECT payload_hash FROM graph_operations WHERE dialogue_id=$1 AND operation_id=$2',
+                  [dialogueId, message.operationId],
+                );
+                if (prior.rows[0]) {
+                  if (prior.rows[0].payload_hash !== payloadHash)
+                    throw new AccessError('Идентификатор операции уже использован.');
+                  return false;
+                }
+                if (
+                  new Set(message.positions.map((p) => p.nodeId)).size !== message.positions.length
+                )
+                  throw new AccessError('Нода указана несколько раз.');
+                for (const position of message.positions) {
+                  const updated = await client.query(
+                    'UPDATE nodes SET x=$3,y=$4 WHERE id=$1 AND dialogue_id=$2',
+                    [position.nodeId, dialogueId, position.x, position.y],
+                  );
+                  if (updated.rowCount !== 1) throw new AccessError('Нода недоступна.');
+                }
+                await client.query(
+                  'INSERT INTO graph_operations(dialogue_id,operation_id,payload_hash) VALUES ($1,$2,$3)',
+                  [dialogueId, message.operationId, payloadHash],
+                );
+                return true;
+              });
+              if (changed)
+                broadcast(dialogueId, { type: 'positions', positions: message.positions });
+              send(socket, { type: 'saved', operationId: message.operationId });
+            } else if (message.type === 'open-text') {
               const result = await pool.query(
                 "SELECT text_state FROM nodes WHERE id=$1 AND dialogue_id=$2 AND kind IN ('line','choice')",
                 [message.nodeId, dialogueId],

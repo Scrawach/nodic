@@ -8,6 +8,7 @@ import {
   Handle,
   Position,
   useReactFlow,
+  applyNodeChanges,
   type NodeProps,
   type Node,
 } from '@xyflow/react';
@@ -77,6 +78,22 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
   const [error, setError] = useState('');
   const [menu, setMenu] = useState<{ x: number; y: number }>();
   const flow = useReactFlow();
+  const [boardNodes, setBoardNodes] = useState<Node<{ story: DialogueNode }>[]>([]);
+  useEffect(() => {
+    setBoardNodes((current) =>
+      state.nodes.map((n) => {
+        const prior = current.find((node) => node.id === n.id);
+        return {
+          ...prior,
+          id: n.id,
+          type: 'story',
+          data: { story: n },
+          position: prior?.dragging && state.connected ? prior.position : { x: n.x, y: n.y },
+          dragging: state.connected && prior?.dragging,
+        };
+      }),
+    );
+  }, [state.nodes, state.connected]);
   useEffect(() => () => session.destroy(), [session]);
   const add = async (kind: Exclude<NodeKind, 'start'>, point?: { x: number; y: number }) => {
     if (!state.connected) return;
@@ -137,15 +154,17 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
           </span>
         </div>
         <ReactFlow
-          nodes={state.nodes.map((n) => ({
-            id: n.id,
-            position: { x: n.x, y: n.y },
-            data: { story: n },
-            type: 'story',
-          }))}
+          nodes={boardNodes}
+          onNodesChange={(changes) => setBoardNodes((nodes) => applyNodeChanges(changes, nodes))}
+          onNodeDragStop={(_, node, nodes) =>
+            session.moveNodes(
+              (nodes.length ? nodes : [node]).map((n) => ({ nodeId: n.id, ...n.position })),
+            )
+          }
           edges={[]}
           nodeTypes={nodeTypes}
-          nodesDraggable={false}
+          nodesDraggable={session.canMove()}
+          deleteKeyCode={null}
           nodesConnectable={false}
           zoomOnDoubleClick={false}
           fitView

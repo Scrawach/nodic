@@ -7,10 +7,14 @@ const children = [
     stdio: 'inherit',
     windowsHide: true,
   }),
-  spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1'], {
-    stdio: 'inherit',
-    windowsHide: true,
-  }),
+  spawn(
+    process.execPath,
+    ['node_modules/vite/bin/vite.js', '--host', process.env.VITE_HOST || '127.0.0.1'],
+    {
+      stdio: 'inherit',
+      windowsHide: true,
+    },
+  ),
 ];
 let stopping = false;
 function stop(code = 0) {
