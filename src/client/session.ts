@@ -38,6 +38,49 @@ export class DialogueSession {
   private failed = false;
   private moveOrder = Date.now();
   private sentMove?: string;
+  private undoStack: string[] = [];
+  private redoStack: string[] = [];
+  private reversals = new Map<string, { direction: 'undo' | 'redo'; target: string }>();
+  rememberCreation(operationId: string) {
+    if (this.stopped) return;
+    this.undoStack.push(operationId);
+    this.redoStack = [];
+    this.update();
+  }
+  canUndoGraph() {
+    return this.canMove() && !this.pending.size && this.undoStack.length > 0;
+  }
+  canRedoGraph() {
+    return this.canMove() && !this.pending.size && this.redoStack.length > 0;
+  }
+  undoGraph() {
+    this.reverse('undo');
+  }
+  redoGraph() {
+    this.reverse('redo');
+  }
+  private reverse(direction: 'undo' | 'redo') {
+    if (!(direction === 'undo' ? this.canUndoGraph() : this.canRedoGraph())) return;
+    const target = (direction === 'undo' ? this.undoStack : this.redoStack).at(-1)!;
+    const operationId = crypto.randomUUID();
+    this.reversals.set(operationId, { direction, target });
+    this.command({ type: 'reverse-graph', operationId, targetOperationId: target });
+  }
+  private finishHistory(operationId: string, accepted: boolean) {
+    const operation = this.pending.get(operationId);
+    if (!operation || operation.type === 'text-update') return;
+    const reversal = this.reversals.get(operationId);
+    if (reversal) {
+      const from = reversal.direction === 'undo' ? this.undoStack : this.redoStack;
+      const to = reversal.direction === 'undo' ? this.redoStack : this.undoStack;
+      if (from.at(-1) === reversal.target) from.pop();
+      if (accepted) to.push(operationId);
+      this.reversals.delete(operationId);
+    } else if (accepted && operation.type !== 'reverse-graph') {
+      this.undoStack.push(operationId);
+      this.redoStack = [];
+    }
+  }
   private state: SessionState = {
     connected: false,
     status: 'Подключение…',
@@ -209,6 +252,8 @@ export class DialogueSession {
       } else if (message.type === 'saved') {
         void del(this.outboxPrefix + message.operationId)
           .then(() => {
+            this.finishHistory(message.operationId, true);
+            if (message.notice) this.update({ notice: message.notice });
             this.pending.delete(message.operationId);
             this.durable.delete(message.operationId);
             if (this.sentMove === message.operationId) this.sentMove = undefined;
@@ -224,6 +269,7 @@ export class DialogueSession {
         if (message.rejected && operation && operation.type !== 'text-update') {
           void del(this.outboxPrefix + message.operationId)
             .then(() => {
+              this.finishHistory(message.operationId, false);
               this.pending.delete(message.operationId);
               this.durable.delete(message.operationId);
               if (this.sentMove === message.operationId) this.sentMove = undefined;

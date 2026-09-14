@@ -8,7 +8,7 @@ import { cookieName, createProject, grantAccess, requireDialogue, requireProject
 import { registerLive } from './live';
 import { readGraph } from './graph';
 import { characterColors } from '../shared/model';
-import { AccessError } from './access';
+import { AccessError, dialogueActor } from './access';
 import { createOnce } from './creation';
 
 export async function createApp(options: { databaseUrl?: string; publicOrigin?: string } = {}) {
@@ -90,7 +90,12 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
       .parse(request.body);
     const node = { id: randomUUID(), ...body, preview: '', characterId: null };
     const operationId = z.uuid().optional().parse(request.headers['idempotency-key']);
-    const result = await live.createNode(dialogueId, node, operationId);
+    const result = await live.createNode(
+      dialogueId,
+      node,
+      await dialogueActor(pool, request, dialogueId),
+      operationId,
+    );
     return reply.code(201).send(result);
   });
   app.post('/api/projects/:projectId/dialogues', async (request, reply) => {

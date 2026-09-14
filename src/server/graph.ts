@@ -19,7 +19,11 @@ export async function readGraph(
 }
 
 // The caller holds the dialogue lock and owns the transaction and post-commit delivery.
-export async function applyGraph(client: pg.PoolClient, dialogueId: string, command: GraphCommand) {
+export async function applyGraph(
+  client: pg.PoolClient,
+  dialogueId: string,
+  command: Exclude<GraphCommand, { type: 'reverse-graph' }>,
+) {
   const graph = await readGraph(client, dialogueId);
   const node = (id: string) => {
     const found = graph.nodes.find((n) => n.id === id);

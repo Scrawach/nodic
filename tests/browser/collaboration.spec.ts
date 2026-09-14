@@ -371,3 +371,92 @@ for (const kind of ['dialogues', 'characters'] as const) {
     }
   });
 }
+
+test('structural undo and redo are shared and preserve a later colleague move', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('History');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const link = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  const transform = (p: typeof page) =>
+    p
+      .getByTestId('node-start')
+      .locator('..')
+      .evaluate((el) => (el as HTMLElement).style.transform);
+  const move = async (p: typeof page, dx: number) => {
+    const box = await p.getByTestId('node-start').boundingBox();
+    if (!box) throw Error('Missing node');
+    await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await p.mouse.down();
+    await p.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + 30, { steps: 10 });
+    await p.mouse.up();
+    await expect(p.getByTestId('save-status')).toHaveText('Сохранено');
+  };
+  try {
+    await other.goto(link);
+    await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
+    const initial = await transform(page);
+    await move(page, 90);
+    await expect(
+      page.getByRole('button', { name: 'Отменить структуру', exact: true }),
+    ).toBeEnabled();
+    const moved = await transform(page);
+    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await expect.poll(() => transform(other)).toBe(initial);
+    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await expect.poll(() => transform(other)).toBe(moved);
+    await move(other, 70);
+    const foreign = await transform(other);
+    await expect.poll(() => transform(page)).toBe(foreign);
+    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('Отмена пропущена');
+    await expect.poll(() => transform(page)).toBe(foreign);
+  } finally {
+    await context.close();
+  }
+});
+
+test('creation and deletion undo restore the same node and its shared text', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Restoration');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const link = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await other.goto(link);
+    await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
+    await page
+      .locator('.react-flow__pane')
+      .click({ button: 'right', position: { x: 400, y: 220 } });
+    await page.getByRole('button', { name: 'Реплика', exact: true }).click();
+    await expect(other.getByTestId('node-line')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await expect(other.getByTestId('node-line')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await expect(other.getByTestId('node-line')).toHaveCount(1);
+    await other.getByTestId('node-line').dblclick();
+    await other.getByRole('textbox', { name: 'Текст реплики' }).fill('Текст коллеги');
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Текст коллеги');
+    await page.getByTestId('node-line').click({ button: 'right' });
+    await page.getByRole('button', { name: 'Удалить ноду' }).click();
+    await expect(other.getByRole('textbox', { name: 'Текст реплики' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Текст коллеги');
+    await other.getByTestId('node-line').dblclick();
+    await expect(other.getByRole('textbox', { name: 'Текст реплики' })).toHaveText('Текст коллеги');
+  } finally {
+    await context.close();
+  }
+});

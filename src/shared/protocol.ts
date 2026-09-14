@@ -6,6 +6,11 @@ const encoded = z
   .regex(/^[A-Za-z0-9+/]*={0,2}$/);
 export const graphCommand = z.discriminatedUnion('type', [
   z.object({
+    type: z.literal('reverse-graph'),
+    operationId: z.uuid(),
+    targetOperationId: z.uuid(),
+  }),
+  z.object({
     type: z.literal('move-nodes'),
     operationId: z.uuid(),
     positions: z

@@ -26,6 +26,9 @@ export async function openDatabase(
     await client.query(
       await readFile(new URL('./migrations/005-creation-operations.sql', import.meta.url), 'utf8'),
     );
+    await client.query(
+      await readFile(new URL('./migrations/006-graph-history.sql', import.meta.url), 'utf8'),
+    );
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');

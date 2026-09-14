@@ -74,3 +74,11 @@ export async function requireDialogue(pool: pg.Pool, request: FastifyRequest, di
   if (!result.rows[0]) throw new AccessError('Диалог недоступен.');
   return requireProject(pool, request, result.rows[0].project_id);
 }
+
+export async function dialogueActor(pool: pg.Pool, request: FastifyRequest, dialogueId: string) {
+  const result = await pool.query('SELECT project_id FROM dialogues WHERE id=$1', [dialogueId]);
+  if (!result.rows[0]) throw new AccessError('Диалог недоступен.');
+  const projectId = result.rows[0].project_id;
+  await requireProject(pool, request, projectId);
+  return hash(request.cookies[cookieName(projectId)]!);
+}

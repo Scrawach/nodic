@@ -149,7 +149,11 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
     if (!state.connected) return;
     const position = flow.screenToFlowPosition(point || { x: innerWidth / 2, y: innerHeight / 2 });
     try {
-      await api(`/dialogues/${dialogueId}/nodes`, { kind, ...position });
+      const created = await api<{ operationId?: string }>(`/dialogues/${dialogueId}/nodes`, {
+        kind,
+        ...position,
+      });
+      if (created.operationId) session.rememberCreation(created.operationId);
       setMenu(undefined);
     } catch (e) {
       setError(String(e));
@@ -197,6 +201,12 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             <strong>{project.dialogues.find((d) => d.id === dialogueId)?.name}</strong>
           </div>
           <div className="button-row">
+            <button disabled={!session.canUndoGraph()} onClick={() => session.undoGraph()}>
+              Отменить структуру
+            </button>
+            <button disabled={!session.canRedoGraph()} onClick={() => session.redoGraph()}>
+              Повторить структуру
+            </button>
             <span className="presence-pill">◉ {state.peers} на доске</span>
             <button onClick={() => setSharing(true)}>Поделиться ↗</button>
           </div>

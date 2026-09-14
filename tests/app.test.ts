@@ -674,3 +674,285 @@ test('creation keys are scoped to projects and replay cannot resurrect a deleted
     peer.socket.close();
   }
 });
+
+test('structural undo is personal, atomic, repeatable and detects intervening writes', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Structural undo' } })
+  ).json();
+  const access = async (token: string) => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/projects/' + project.id + '/access',
+      payload: { token },
+    });
+    return response.cookies.map((c) => c.name + '=' + c.value).join('; ');
+  };
+  const cookieA = await access(project.ownerToken),
+    cookieB = await access(project.editorToken);
+  const create = async (x: number) =>
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/dialogues/' + project.dialogueId + '/nodes',
+        headers: { cookie: cookieA },
+        payload: { kind: 'line', x, y: 20 },
+      })
+    ).json();
+  const first = await create(10),
+    second = await create(30);
+  currentDialogue = project.dialogueId;
+  const a = connect(cookieA),
+    b = connect(cookieB);
+  const send = async (
+    peer: ReturnType<typeof connect>,
+    command: Record<string, unknown>,
+    outcome = 'saved',
+  ) => {
+    const operationId = crypto.randomUUID();
+    peer.send({ ...command, operationId });
+    await peer.next(outcome);
+    return operationId;
+  };
+  const read = async () =>
+    (
+      await app.inject({
+        url: '/api/dialogues/' + project.dialogueId,
+        headers: { cookie: cookieA },
+      })
+    ).json();
+  try {
+    await a.next('ready');
+    await b.next('ready');
+    const move = await send(a, {
+      type: 'move-nodes',
+      positions: [
+        { nodeId: first.id, x: 100, y: 100 },
+        { nodeId: second.id, x: 120, y: 100 },
+      ],
+    });
+    const later = await send(a, {
+      type: 'move-nodes',
+      positions: [{ nodeId: first.id, x: 200, y: 200 }],
+    });
+    const undoLater = await send(a, { type: 'reverse-graph', targetOperationId: later });
+    const undoMove = await send(a, { type: 'reverse-graph', targetOperationId: move });
+    expect((await read()).nodes.find((n: { id: string }) => n.id === first.id)).toMatchObject({
+      x: 10,
+      y: 20,
+    });
+    expect((await read()).nodes.find((n: { id: string }) => n.id === second.id)).toMatchObject({
+      x: 30,
+      y: 20,
+    });
+    await send(a, { type: 'reverse-graph', targetOperationId: undoMove });
+    await send(a, { type: 'reverse-graph', targetOperationId: undoLater });
+    expect((await read()).nodes.find((n: { id: string }) => n.id === first.id)).toMatchObject({
+      x: 200,
+      y: 200,
+    });
+    // A replay of a prior undo must not overwrite the redo.
+    a.send({ type: 'reverse-graph', targetOperationId: later, operationId: undoLater });
+    await a.next('saved');
+    expect((await read()).nodes.find((n: { id: string }) => n.id === first.id)).toMatchObject({
+      x: 200,
+      y: 200,
+    });
+    await send(b, { type: 'reverse-graph', targetOperationId: later }, 'error');
+    await send(a, { type: 'reverse-graph', targetOperationId: later });
+    await send(b, { type: 'move-nodes', positions: [{ nodeId: second.id, x: 999, y: 999 }] });
+    await send(b, { type: 'move-nodes', positions: [{ nodeId: second.id, x: 120, y: 100 }] });
+    await send(a, { type: 'reverse-graph', targetOperationId: move }, 'error');
+    expect((await read()).nodes.find((n: { id: string }) => n.id === first.id)).toMatchObject({
+      x: 100,
+      y: 100,
+    });
+    expect((await read()).nodes.find((n: { id: string }) => n.id === second.id)).toMatchObject({
+      x: 120,
+      y: 100,
+    });
+    const fresh = await create(50);
+    const undoCreation = await send(a, {
+      type: 'reverse-graph',
+      targetOperationId: fresh.operationId,
+    });
+    expect((await read()).nodes.map((n: { id: string }) => n.id)).not.toContain(fresh.id);
+    await send(a, { type: 'reverse-graph', targetOperationId: undoCreation });
+    expect((await read()).nodes.map((n: { id: string }) => n.id)).toContain(fresh.id);
+    b.send({ type: 'open-text', nodeId: fresh.id });
+    await b.next('text-state');
+    const foreign = new Y.Doc();
+    foreign.getText('text').insert(0, 'Коллега');
+    await send(b, {
+      type: 'text-update',
+      nodeId: fresh.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(foreign)).toString('base64'),
+    });
+    a.send({ type: 'open-text', nodeId: fresh.id });
+    const current = await a.next('text-state');
+    const own = new Y.Doc();
+    Y.applyUpdate(own, Buffer.from(String(current.data), 'base64'));
+    own.getText('text').insert(own.getText('text').length, ' и я');
+    await send(a, {
+      type: 'text-update',
+      nodeId: fresh.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(own)).toString('base64'),
+    });
+    await send(a, { type: 'reverse-graph', targetOperationId: fresh.operationId }, 'error');
+    expect((await read()).nodes.find((n: { id: string }) => n.id === fresh.id).preview).toBe(
+      'Коллега и я',
+    );
+    own.destroy();
+    foreign.destroy();
+  } finally {
+    a.socket.close();
+    b.socket.close();
+  }
+});
+
+test('undo deletion retains late text and restores only valid edges', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Restore' } })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + project.id + '/access',
+    payload: { token: project.ownerToken },
+  });
+  const cookie = grant.cookies.map((c) => c.name + '=' + c.value).join('; ');
+  const create = async () =>
+    (
+      await app.inject({
+        method: 'POST',
+        url: '/api/dialogues/' + project.dialogueId + '/nodes',
+        headers: { cookie },
+        payload: { kind: 'line', x: 20, y: 20 },
+      })
+    ).json();
+  const first = await create(),
+    target = await create();
+  currentDialogue = project.dialogueId;
+  const peer = connect(cookie);
+  const send = async (command: Record<string, unknown>) => {
+    const operationId = crypto.randomUUID();
+    peer.send({ ...command, operationId });
+    return { operationId, receipt: await peer.next('saved') };
+  };
+  const read = async () =>
+    (await app.inject({ url: '/api/dialogues/' + project.dialogueId, headers: { cookie } })).json();
+  try {
+    await peer.next('ready');
+    const edgeId = crypto.randomUUID();
+    await send({ type: 'connect-edge', edgeId, source: first.id, target: target.id });
+    const bend = await send({ type: 'bend-edge', edgeId, bend: { x: 12, y: 34 } });
+    await send({ type: 'reverse-graph', targetOperationId: bend.operationId });
+    expect((await read()).edges[0].bend).toBeNull();
+    const removed = await send({ type: 'delete-node', nodeId: first.id });
+    const doc = new Y.Doc();
+    doc.getText('text').insert(0, 'Late text survives');
+    await send({
+      type: 'text-update',
+      nodeId: first.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64'),
+    });
+    doc.destroy();
+    const intact = await send({ type: 'reverse-graph', targetOperationId: removed.operationId });
+    expect((await read()).edges.map((edge: { id: string }) => edge.id)).toContain(edgeId);
+    expect((await read()).nodes.find((n: { id: string }) => n.id === first.id).preview).toBe(
+      'Late text survives',
+    );
+    await send({ type: 'reverse-graph', targetOperationId: intact.operationId });
+    await send({ type: 'delete-node', nodeId: target.id });
+    const restored = await send({ type: 'reverse-graph', targetOperationId: removed.operationId });
+    expect(restored.receipt.notice).toContain('часть связей пропущена');
+    expect((await read()).nodes.find((n: { id: string }) => n.id === first.id).preview).toBe(
+      'Late text survives',
+    );
+    expect((await read()).edges).toHaveLength(0);
+    const deletedAgain = await send({
+      type: 'reverse-graph',
+      targetOperationId: restored.operationId,
+    });
+    expect((await read()).nodes.map((n: { id: string }) => n.id)).not.toContain(first.id);
+    await send({ type: 'reverse-graph', targetOperationId: deletedAgain.operationId });
+    expect((await read()).nodes.find((n: { id: string }) => n.id === first.id).preview).toBe(
+      'Late text survives',
+    );
+  } finally {
+    peer.socket.close();
+  }
+});
+
+test('undo assignment preserves other fields and edge restoration rechecks branching', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Field history' } })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + project.id + '/access',
+    payload: { token: project.ownerToken },
+  });
+  const cookie = grant.cookies.map((c) => c.name + '=' + c.value).join('; ');
+  const post = async (url: string, payload: unknown) =>
+    (
+      await app.inject({
+        method: 'POST',
+        url,
+        headers: { cookie },
+        payload: payload as Record<string, unknown>,
+      })
+    ).json();
+  const source = await post('/api/dialogues/' + project.dialogueId + '/nodes', {
+    kind: 'line',
+    x: 10,
+    y: 20,
+  });
+  const target = await post('/api/dialogues/' + project.dialogueId + '/nodes', {
+    kind: 'line',
+    x: 30,
+    y: 20,
+  });
+  const choice = await post('/api/dialogues/' + project.dialogueId + '/nodes', {
+    kind: 'choice',
+    x: 50,
+    y: 20,
+  });
+  const character = await post('/api/projects/' + project.id + '/characters', { name: 'Narrator' });
+  currentDialogue = project.dialogueId;
+  const peer = connect(cookie);
+  const send = async (command: Record<string, unknown>) => {
+    const operationId = crypto.randomUUID();
+    peer.send({ ...command, operationId });
+    return { operationId, receipt: await peer.next('saved') };
+  };
+  const read = async () =>
+    (await app.inject({ url: '/api/dialogues/' + project.dialogueId, headers: { cookie } })).json();
+  try {
+    await peer.next('ready');
+    const assignment = await send({
+      type: 'set-character',
+      nodeId: source.id,
+      characterId: character.id,
+    });
+    await send({ type: 'move-nodes', positions: [{ nodeId: source.id, x: 200, y: 300 }] });
+    await send({ type: 'reverse-graph', targetOperationId: assignment.operationId });
+    expect((await read()).nodes.find((n: { id: string }) => n.id === source.id)).toMatchObject({
+      x: 200,
+      y: 300,
+      characterId: null,
+    });
+    const edgeId = crypto.randomUUID();
+    await send({ type: 'connect-edge', edgeId, source: source.id, target: target.id });
+    const deletion = await send({ type: 'delete-edge', edgeId });
+    await send({
+      type: 'connect-edge',
+      edgeId: crypto.randomUUID(),
+      source: source.id,
+      target: choice.id,
+    });
+    const restored = await send({ type: 'reverse-graph', targetOperationId: deletion.operationId });
+    expect(restored.receipt.notice).toContain('часть связей пропущена');
+    expect((await read()).edges.map((e: { target: string }) => e.target)).toEqual([choice.id]);
+  } finally {
+    peer.socket.close();
+  }
+});
