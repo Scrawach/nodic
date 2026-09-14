@@ -541,3 +541,136 @@ test('character colours are distinct by default, editable, persistent and projec
   ).json();
   expect(reopened.characters).toEqual(expect.arrayContaining([{ ...a, color: '#487fbd' }, b]));
 });
+
+test('creation retries are durable, concurrent, payload-bound and access checked', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Retries' } })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + project.id + '/access',
+    payload: { token: project.ownerToken },
+  });
+  const cookie = grant.cookies.map((c) => c.name + '=' + c.value).join('; ');
+  const cases = [
+    {
+      url: '/api/dialogues/' + project.dialogueId + '/nodes',
+      payload: { kind: 'line', x: 10, y: 20 },
+      changed: { kind: 'line', x: 11, y: 20 },
+    },
+    {
+      url: '/api/projects/' + project.id + '/dialogues',
+      payload: { name: 'Repeated dialogue' },
+      changed: { name: 'Changed' },
+    },
+    {
+      url: '/api/projects/' + project.id + '/characters',
+      payload: { name: 'Repeated character' },
+      changed: { name: 'Changed' },
+    },
+  ];
+  for (const example of cases) {
+    const key = crypto.randomUUID();
+    const send = () =>
+      app.inject({
+        method: 'POST',
+        url: example.url,
+        payload: example.payload,
+        headers: { cookie, 'idempotency-key': key },
+      });
+    const replies = await Promise.all([send(), send(), send()]);
+    for (const response of replies) {
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toEqual(replies[0]!.json());
+    }
+    const denied = await app.inject({
+      method: 'POST',
+      url: example.url,
+      payload: example.payload,
+      headers: { 'idempotency-key': key },
+    });
+    expect(denied.statusCode).toBe(403);
+    const conflict = await app.inject({
+      method: 'POST',
+      url: example.url,
+      payload: example.changed,
+      headers: { cookie, 'idempotency-key': key },
+    });
+    expect(conflict.statusCode).toBe(409);
+    await app.close();
+    app = await createApp();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    expect((await send()).json()).toEqual(replies[0]!.json());
+  }
+  const graph = (
+    await app.inject({ url: '/api/dialogues/' + project.dialogueId, headers: { cookie } })
+  ).json();
+  expect(graph.nodes.filter((node: { kind: string }) => node.kind === 'line')).toHaveLength(1);
+  const saved = (
+    await app.inject({ url: '/api/projects/' + project.id, headers: { cookie } })
+  ).json();
+  expect(saved.dialogues).toHaveLength(2);
+  expect(saved.characters).toHaveLength(1);
+});
+
+test('creation keys are scoped to projects and replay cannot resurrect a deleted node', async () => {
+  const create = async () => {
+    const project = (
+      await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Scope' } })
+    ).json();
+    const grant = await app.inject({
+      method: 'POST',
+      url: '/api/projects/' + project.id + '/access',
+      payload: { token: project.ownerToken },
+    });
+    return { project, cookie: grant.cookies.map((c) => c.name + '=' + c.value).join('; ') };
+  };
+  const one = await create(),
+    two = await create();
+  const key = crypto.randomUUID();
+  const character = async (owner: typeof one) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/projects/' + owner.project.id + '/characters',
+      payload: { name: 'Same' },
+      headers: { cookie: owner.cookie, 'idempotency-key': key },
+    });
+  const a = await character(one),
+    b = await character(two);
+  expect(a.statusCode).toBe(201);
+  expect(b.statusCode).toBe(201);
+  expect(a.json().id).not.toBe(b.json().id);
+  const forbidden = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + two.project.id + '/characters',
+    payload: { name: 'Same' },
+    headers: { cookie: one.cookie, 'idempotency-key': key },
+  });
+  expect(forbidden.statusCode).toBe(403);
+  const nodeKey = crypto.randomUUID();
+  const nodeRequest = () =>
+    app.inject({
+      method: 'POST',
+      url: '/api/dialogues/' + one.project.dialogueId + '/nodes',
+      payload: { kind: 'line', x: 10, y: 20 },
+      headers: { cookie: one.cookie, 'idempotency-key': nodeKey },
+    });
+  const node = (await nodeRequest()).json();
+  currentDialogue = one.project.dialogueId;
+  const peer = connect(one.cookie);
+  try {
+    await peer.next('ready');
+    peer.send({ type: 'delete-node', operationId: crypto.randomUUID(), nodeId: node.id });
+    await peer.next('graph');
+    expect((await nodeRequest()).json()).toEqual(node);
+    const graph = (
+      await app.inject({
+        url: '/api/dialogues/' + currentDialogue,
+        headers: { cookie: one.cookie },
+      })
+    ).json();
+    expect(graph.nodes.map((item: { id: string }) => item.id)).not.toContain(node.id);
+  } finally {
+    peer.socket.close();
+  }
+});

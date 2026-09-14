@@ -19,3 +19,7 @@ Read `README.md` for setup and `docs/first-slice.md` for the current implementat
 Run `npm run typecheck`, `npm test`, `npm run test:e2e`, and `npm run build` for changes to collaboration. Tests require PostgreSQL (`npm run db:up`). Test through public application operations and independent browser contexts; do not inspect database tables as assertions.
 
 Treat `src/server/live.ts` as the persistence boundary: acknowledge text changes only after the database transaction commits. Prototype code belongs on `prototype/collaboration-model`, not in production imports.
+
+## Continuing v1 work
+
+Before implementing or resuming remaining v1 work, read `docs/tasks/PROGRESS.md` for task descriptions, current progress, verification results, and the next step. Update it when handing off work.

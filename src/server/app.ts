@@ -3,12 +3,13 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { openDatabase, transaction } from './database';
+import { openDatabase } from './database';
 import { cookieName, createProject, grantAccess, requireDialogue, requireProject } from './access';
 import { registerLive } from './live';
 import { readGraph } from './graph';
 import { characterColors } from '../shared/model';
 import { AccessError } from './access';
+import { createOnce } from './creation';
 
 export async function createApp(options: { databaseUrl?: string; publicOrigin?: string } = {}) {
   const pool = await openDatabase(options.databaseUrl);
@@ -88,27 +89,36 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
       })
       .parse(request.body);
     const node = { id: randomUUID(), ...body, preview: '', characterId: null };
-    await live.createNode(dialogueId, node);
-    return reply.code(201).send(node);
+    const operationId = z.uuid().optional().parse(request.headers['idempotency-key']);
+    const result = await live.createNode(dialogueId, node, operationId);
+    return reply.code(201).send(result);
   });
   app.post('/api/projects/:projectId/dialogues', async (request, reply) => {
     const { projectId } = z.object({ projectId: z.uuid() }).parse(request.params);
     await requireProject(pool, request, projectId);
     const { name } = z.object({ name: z.string().trim().min(1).max(120) }).parse(request.body);
     const dialogue = { id: randomUUID(), name };
-    await transaction(pool, async (client) => {
-      await client.query('INSERT INTO dialogues(id,project_id,name) VALUES ($1,$2,$3)', [
-        dialogue.id,
-        projectId,
-        name,
-      ]);
-      await client.query(
-        "INSERT INTO nodes(id,dialogue_id,kind,x,y) VALUES ($1,$2,'start',80,200)",
-        [randomUUID(), dialogue.id],
-      );
-    });
-    await live.notifyProject(projectId);
-    return reply.code(201).send(dialogue);
+    const operationId = z.uuid().optional().parse(request.headers['idempotency-key']);
+    const result = await createOnce(
+      pool,
+      `project:${projectId}:dialogues`,
+      operationId,
+      { name },
+      async (client) => {
+        await client.query('INSERT INTO dialogues(id,project_id,name) VALUES ($1,$2,$3)', [
+          dialogue.id,
+          projectId,
+          name,
+        ]);
+        await client.query(
+          "INSERT INTO nodes(id,dialogue_id,kind,x,y) VALUES ($1,$2,'start',80,200)",
+          [randomUUID(), dialogue.id],
+        );
+        return dialogue;
+      },
+    );
+    if (result.created) await live.notifyProject(projectId);
+    return reply.code(201).send(result.value);
   });
   app.post('/api/projects/:projectId/characters', async (request, reply) => {
     const { projectId } = z.object({ projectId: z.uuid() }).parse(request.params);
@@ -122,26 +132,31 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
           .optional(),
       })
       .parse(request.body);
-    const character = await transaction(pool, async (client) => {
-      await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId]);
-      const used = await client.query('SELECT color FROM characters WHERE project_id=$1', [
-        projectId,
-      ]);
-      const color =
-        body.color?.toLowerCase() ||
-        characterColors.find((c) => !used.rows.some((row) => row.color === c)) ||
-        characterColors[used.rows.length % characterColors.length];
-      const value = { id: randomUUID(), name: body.name, color };
-      await client.query('INSERT INTO characters(id,project_id,name,color) VALUES ($1,$2,$3,$4)', [
-        value.id,
-        projectId,
-        value.name,
-        value.color,
-      ]);
-      return value;
-    });
-    await live.notifyProject(projectId);
-    return reply.code(201).send(character);
+    const operationId = z.uuid().optional().parse(request.headers['idempotency-key']);
+    const result = await createOnce(
+      pool,
+      `project:${projectId}:characters`,
+      operationId,
+      body,
+      async (client) => {
+        await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId]);
+        const used = await client.query('SELECT color FROM characters WHERE project_id=$1', [
+          projectId,
+        ]);
+        const color =
+          body.color?.toLowerCase() ||
+          characterColors.find((c) => !used.rows.some((row) => row.color === c)) ||
+          characterColors[used.rows.length % characterColors.length];
+        const value = { id: randomUUID(), name: body.name, color };
+        await client.query(
+          'INSERT INTO characters(id,project_id,name,color) VALUES ($1,$2,$3,$4)',
+          [value.id, projectId, value.name, value.color],
+        );
+        return value;
+      },
+    );
+    if (result.created) await live.notifyProject(projectId);
+    return reply.code(201).send(result.value);
   });
   app.post('/api/projects/:projectId/characters/:characterId/color', async (request) => {
     const { projectId, characterId } = z

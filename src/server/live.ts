@@ -1,3 +1,4 @@
+import { createOnce } from './creation';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import type WebSocket from 'ws';
@@ -265,19 +266,25 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
       ]);
       for (const dialogue of dialogues.rows) broadcast(dialogue.id, { type: 'project-changed' });
     },
-    createNode: (dialogueId: string, node: DialogueNode) =>
+    createNode: (dialogueId: string, node: DialogueNode, operationId?: string) =>
       enqueue(dialogueId, async () => {
-        await transaction(pool, async (client) => {
-          await client.query('SELECT id FROM dialogues WHERE id=$1 FOR UPDATE', [dialogueId]);
-          await client.query('INSERT INTO nodes(id,dialogue_id,kind,x,y) VALUES ($1,$2,$3,$4,$5)', [
-            node.id,
-            dialogueId,
-            node.kind,
-            node.x,
-            node.y,
-          ]);
-        });
-        broadcast(dialogueId, { type: 'node', node });
+        const input = { kind: node.kind, x: node.x, y: node.y };
+        const result = await createOnce(
+          pool,
+          'dialogue:' + dialogueId + ':nodes',
+          operationId,
+          input,
+          async (client) => {
+            await client.query('SELECT id FROM dialogues WHERE id=$1 FOR UPDATE', [dialogueId]);
+            await client.query(
+              'INSERT INTO nodes(id,dialogue_id,kind,x,y) VALUES ($1,$2,$3,$4,$5)',
+              [node.id, dialogueId, node.kind, node.x, node.y],
+            );
+            return node;
+          },
+        );
+        if (result.created) broadcast(dialogueId, { type: 'node', node: result.value });
+        return result.value;
       }),
   };
 }

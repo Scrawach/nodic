@@ -263,3 +263,111 @@ test('authors connect and shape edges, assign characters, delete nodes and add d
     await context.close();
   }
 });
+
+test('a lost creation response is replayed after reload without duplicate nodes', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Durable creation');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Durable creation' })).toBeVisible();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const editorLink = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await other.goto(editorLink);
+    await expect(other.getByTestId('node-start')).toBeVisible();
+    const keys: string[] = [];
+    await page.route('**/api/dialogues/*/nodes', async (route) => {
+      keys.push(route.request().headers()['idempotency-key']!);
+      const committed = await route.fetch();
+      expect(committed.status()).toBe(201);
+      await route.abort('failed');
+    });
+    await page
+      .locator('.react-flow__pane')
+      .click({ button: 'right', position: { x: 400, y: 220 } });
+    await page.getByRole('button', { name: 'Реплика', exact: true }).click();
+    await expect.poll(() => keys.length).toBe(2);
+    await expect(page.getByRole('alert').first()).toBeVisible();
+    await expect(other.getByTestId('node-line')).toHaveCount(1);
+    await page.unroute('**/api/dialogues/*/nodes');
+    page.on('request', (request) => {
+      if (
+        request.method() === 'POST' &&
+        /\/api\/dialogues\/[^/]+\/nodes$/.test(new URL(request.url()).pathname)
+      ) {
+        keys.push(request.headers()['idempotency-key']!);
+      }
+    });
+    await page.reload();
+    await expect(page.getByTestId('node-line')).toHaveCount(1);
+    await expect.poll(() => keys.length).toBe(3);
+    expect(keys[0]).toBeTruthy();
+    expect(new Set(keys).size).toBe(1);
+    await other.reload();
+    await expect(other.getByTestId('node-line')).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});
+
+for (const kind of ['dialogues', 'characters'] as const) {
+  test('lost ' + kind + ' creation response recovers on reopening project', async ({ page }) => {
+    await page.goto('/');
+    await page.getByLabel('Название проекта').fill('Project recovery');
+    await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Project recovery' })).toBeVisible();
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    if (kind === 'characters') {
+      await page
+        .locator('.react-flow__pane')
+        .click({ button: 'right', position: { x: 400, y: 220 } });
+      await page.getByRole('button', { name: 'Реплика', exact: true }).click();
+      await page.getByTestId('node-line').dblclick();
+      await page.getByRole('button', { name: 'Новый персонаж' }).click();
+      await page.getByLabel('Имя персонажа').fill('Recovered');
+    } else {
+      await page.getByRole('button', { name: 'Новый диалог' }).click();
+      await page.getByLabel('Название диалога').fill('Recovered');
+    }
+    const pattern = '**/api/projects/*/' + kind;
+    const keys: string[] = [];
+    await page.route(pattern, async (route) => {
+      keys.push(route.request().headers()['idempotency-key']!);
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      await route.abort('failed');
+    });
+    await page
+      .getByRole('button', {
+        name: kind === 'characters' ? 'Создать персонажа' : 'Создать диалог',
+        exact: true,
+      })
+      .click();
+    await expect.poll(() => keys.length).toBe(2);
+    await expect(page.getByRole('alert').first()).toBeVisible();
+    await page.unroute(pattern);
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/' + kind))
+        keys.push(request.headers()['idempotency-key']!);
+    });
+    await page.reload();
+    await expect.poll(() => keys.length).toBe(3);
+    expect(new Set(keys).size).toBe(1);
+    if (kind === 'characters') {
+      await page.getByTestId('node-line').dblclick();
+      await expect(
+        page
+          .getByLabel('Персонаж', { exact: true })
+          .locator('option')
+          .filter({ hasText: 'Recovered' }),
+      ).toHaveCount(1);
+    } else {
+      await expect(page.getByRole('link', { name: 'Recovered' })).toHaveCount(1);
+    }
+  });
+}

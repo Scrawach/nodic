@@ -1,3 +1,4 @@
+import { recoverCreations } from './api';
 import * as Y from 'yjs';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { entries, set, del } from 'idb-keyval';
@@ -108,6 +109,14 @@ export class DialogueSession {
         if (value.type === 'text-update')
           Y.applyUpdate(this.ensureText(value.nodeId).doc, decodeBytes(value.data), REMOTE);
         else this.moveOrder = Math.max(this.moveOrder, value.order);
+      }
+      try {
+        await recoverCreations(`/dialogues/${this.dialogueId}`);
+      } catch {
+        this.update({
+          notice:
+            'Не удалось подтвердить создание нод. Обновите страницу после восстановления связи.',
+        });
       }
       if (!this.stopped) this.connect();
     } catch {
