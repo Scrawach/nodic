@@ -1,0 +1,21 @@
+const { chromium } = require('../node_modules/playwright');
+(async () => {
+ const browser = await chromium.launch({channel:'msedge',headless:true});
+ const page = await browser.newPage({viewport:{width:1440,height:1000}});
+ const errors=[];page.on('pageerror', e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:5173');
+ await page.screenshot({path:'.scratch/nodic-landing.png',fullPage:true});
+ await page.getByLabel('Название проекта').fill('Тихий лес');
+ await page.getByRole('button',{name:'Создать проект',exact:true}).click();
+ await page.getByRole('heading',{name:'Тихий лес'}).waitFor();
+ await page.getByRole('button',{name:'Добавить реплику'}).click();
+ await page.getByTestId('node-line').dblclick();
+ const editor=page.getByRole('textbox',{name:'Текст реплики'});
+ await editor.fill('Ты тоже слышишь голос леса?\nЯ думал, что остался здесь один.');
+ await page.getByTestId('save-status').filter({hasText:'Сохранено'}).waitFor();
+ await page.screenshot({path:'.scratch/nodic-editor.png',fullPage:true});
+ await page.getByRole('button',{name:'Закрыть',exact:true}).click();
+ await page.screenshot({path:'.scratch/nodic-board.png',fullPage:true});
+ console.log(JSON.stringify({url:page.url(),errors}));
+ await browser.close();
+})();
