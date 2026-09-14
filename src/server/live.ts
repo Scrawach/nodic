@@ -10,10 +10,11 @@ import {
   removeAwarenessStates,
 } from 'y-protocols/awareness';
 import { z } from 'zod';
-import { clientMessage } from '../shared/protocol';
+import { clientMessage, graphCommand } from '../shared/protocol';
 import type { DialogueNode } from '../shared/model';
 import { hash, requireDialogue, AccessError } from './access';
 import { transaction } from './database';
+import { applyGraph, readGraph } from './graph';
 
 interface Peer {
   socket: WebSocket;
@@ -31,7 +32,7 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
   const broadcast = (dialogueId: string, message: unknown) => {
     for (const peer of rooms.get(dialogueId) || []) send(peer.socket, message);
   };
-  const enqueue = (id: string, operation: () => Promise<void>) => {
+  const enqueue = <T>(id: string, operation: () => Promise<T>) => {
     const next = (queues.get(id) || Promise.resolve()).catch(() => {}).then(operation);
     queues.set(id, next);
     void next
@@ -73,42 +74,39 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
           try {
             const message = clientMessage.parse(JSON.parse(raw.toString()));
             if ('operationId' in message) operationId = message.operationId;
-            if (message.type === 'move-nodes') {
-              const changed = await transaction(pool, async (client) => {
+            if (graphCommand.safeParse(message).success) {
+              const command = graphCommand.parse(message);
+              const snapshot = await transaction(pool, async (client) => {
                 await client.query('SELECT id FROM dialogues WHERE id=$1 FOR UPDATE', [dialogueId]);
-                const payloadHash = hash(JSON.stringify(message.positions));
+                // Keep existing movement receipts compatible with migration 002.
+                const payloadHash = hash(
+                  JSON.stringify(command.type === 'move-nodes' ? command.positions : command),
+                );
                 const prior = await client.query(
                   'SELECT payload_hash FROM graph_operations WHERE dialogue_id=$1 AND operation_id=$2',
-                  [dialogueId, message.operationId],
+                  [dialogueId, command.operationId],
                 );
                 if (prior.rows[0]) {
                   if (prior.rows[0].payload_hash !== payloadHash)
                     throw new AccessError('Идентификатор операции уже использован.');
-                  return false;
+                  return null;
                 }
-                if (
-                  new Set(message.positions.map((p) => p.nodeId)).size !== message.positions.length
-                )
-                  throw new AccessError('Нода указана несколько раз.');
-                for (const position of message.positions) {
-                  const updated = await client.query(
-                    'UPDATE nodes SET x=$3,y=$4 WHERE id=$1 AND dialogue_id=$2',
-                    [position.nodeId, dialogueId, position.x, position.y],
-                  );
-                  if (updated.rowCount !== 1) throw new AccessError('Нода недоступна.');
-                }
+                const result = await applyGraph(client, dialogueId, command);
                 await client.query(
                   'INSERT INTO graph_operations(dialogue_id,operation_id,payload_hash) VALUES ($1,$2,$3)',
-                  [dialogueId, message.operationId, payloadHash],
+                  [dialogueId, command.operationId, payloadHash],
                 );
-                return true;
+                return result;
               });
-              if (changed)
-                broadcast(dialogueId, { type: 'positions', positions: message.positions });
-              send(socket, { type: 'saved', operationId: message.operationId });
+              if (snapshot) {
+                broadcast(dialogueId, { type: 'graph', ...snapshot });
+                if (command.type === 'move-nodes')
+                  broadcast(dialogueId, { type: 'positions', positions: command.positions });
+              }
+              send(socket, { type: 'saved', operationId: command.operationId });
             } else if (message.type === 'open-text') {
               const result = await pool.query(
-                "SELECT text_state FROM nodes WHERE id=$1 AND dialogue_id=$2 AND kind IN ('line','choice')",
+                "SELECT text_state FROM nodes WHERE id=$1 AND dialogue_id=$2 AND deleted_at IS NULL AND kind IN ('line','choice')",
                 [message.nodeId, dialogueId],
               );
               if (!result.rows[0]) throw new AccessError('Эта нода недоступна для редактирования.');
@@ -131,8 +129,13 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
                 ).toString('base64'),
               });
             } else if (message.type === 'text-update') {
-              if (!peer.texts.has(message.nodeId))
-                throw new AccessError('Сначала откройте редактор ноды.');
+              if (!peer.texts.has(message.nodeId)) {
+                const deleted = await pool.query(
+                  'SELECT id FROM nodes WHERE id=$1 AND dialogue_id=$2 AND deleted_at IS NOT NULL',
+                  [message.nodeId, dialogueId],
+                );
+                if (!deleted.rows.length) throw new AccessError('Сначала откройте редактор ноды.');
+              }
               const update = Buffer.from(message.data, 'base64');
               const result = await transaction(pool, async (client) => {
                 const stored = await client.query(
@@ -184,7 +187,7 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
                 nodeId: message.nodeId,
                 operationId: message.operationId,
               });
-            } else {
+            } else if (message.type === 'awareness') {
               if (!peer.texts.has(message.nodeId)) throw new AccessError('Редактор не открыт.');
               const bytes = Buffer.from(message.data, 'base64');
               const decoder = decoding.createDecoder(bytes);
@@ -207,6 +210,7 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
             send(socket, {
               type: 'error',
               operationId,
+              rejected: error instanceof AccessError,
               message:
                 error instanceof AccessError
                   ? error.message
@@ -240,11 +244,7 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
       });
       socket.on('error', () => {});
       void enqueue(dialogueId, async () => {
-        const result = await pool.query(
-          'SELECT id, kind, x, y, preview FROM nodes WHERE dialogue_id=$1 ORDER BY id',
-          [dialogueId],
-        );
-        send(socket, { type: 'ready', nodes: result.rows });
+        send(socket, { type: 'ready', ...(await readGraph(pool, dialogueId)) });
       }).catch(() => socket.close(1011));
       broadcast(dialogueId, { type: 'peers', count: room.size });
     },
@@ -259,7 +259,25 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
     presence.clear();
   });
   return {
-    notifyNode: (dialogueId: string, node: DialogueNode) =>
-      broadcast(dialogueId, { type: 'node', node }),
+    notifyProject: async (projectId: string) => {
+      const dialogues = await pool.query('SELECT id FROM dialogues WHERE project_id=$1', [
+        projectId,
+      ]);
+      for (const dialogue of dialogues.rows) broadcast(dialogue.id, { type: 'project-changed' });
+    },
+    createNode: (dialogueId: string, node: DialogueNode) =>
+      enqueue(dialogueId, async () => {
+        await transaction(pool, async (client) => {
+          await client.query('SELECT id FROM dialogues WHERE id=$1 FOR UPDATE', [dialogueId]);
+          await client.query('INSERT INTO nodes(id,dialogue_id,kind,x,y) VALUES ($1,$2,$3,$4,$5)', [
+            node.id,
+            dialogueId,
+            node.kind,
+            node.x,
+            node.y,
+          ]);
+        });
+        broadcast(dialogueId, { type: 'node', node });
+      }),
   };
 }

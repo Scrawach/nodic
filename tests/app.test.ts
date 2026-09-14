@@ -311,3 +311,233 @@ test('moves are atomic, shared, persistent and retries cannot overwrite a later 
     b.socket.terminate();
   }
 });
+
+test('graph rules, characters, curves and deletion persist through public operations', async () => {
+  const project = (
+    await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Graph operations' },
+    })
+  ).json();
+  currentDialogue = project.dialogueId;
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.editorToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  const request = (url: string, payload?: Record<string, unknown>) =>
+    app.inject({
+      method: payload === undefined ? 'GET' : 'POST',
+      url,
+      payload,
+      headers: { cookie },
+    });
+  const read = async () => (await request(`/api/dialogues/${currentDialogue}`)).json();
+  const startId = (await read()).nodes[0].id;
+  const line = (
+    await request(`/api/dialogues/${currentDialogue}/nodes`, { kind: 'line', x: 300, y: 100 })
+  ).json();
+  const choice = (
+    await request(`/api/dialogues/${currentDialogue}/nodes`, { kind: 'choice', x: 600, y: 200 })
+  ).json();
+  const end = (
+    await request(`/api/dialogues/${currentDialogue}/nodes`, { kind: 'end', x: 900, y: 200 })
+  ).json();
+  const a = connect(cookie),
+    b = connect(cookie);
+  const command = async (value: Record<string, unknown>, response = 'saved') => {
+    a.send({ operationId: crypto.randomUUID(), ...value });
+    return a.next(response);
+  };
+  try {
+    await Promise.all([a.next('ready'), b.next('ready')]);
+    const edgeId = crypto.randomUUID(),
+      operationId = crypto.randomUUID();
+    const connection = {
+      type: 'connect-edge',
+      operationId,
+      edgeId,
+      source: startId,
+      target: line.id,
+    };
+    await command(connection);
+    await command(connection);
+    expect((await read()).edges).toHaveLength(1);
+    expect(await b.next('graph')).toMatchObject({
+      edges: [{ id: edgeId, source: startId, target: line.id }],
+    });
+    await command(
+      { type: 'connect-edge', edgeId: crypto.randomUUID(), source: startId, target: choice.id },
+      'error',
+    );
+    await command(
+      { type: 'connect-edge', edgeId: crypto.randomUUID(), source: line.id, target: startId },
+      'error',
+    );
+    await command(
+      { type: 'connect-edge', edgeId: crypto.randomUUID(), source: end.id, target: line.id },
+      'error',
+    );
+    await command({ type: 'bend-edge', edgeId, bend: { x: 220, y: 180 } });
+    expect((await read()).edges[0].bend).toEqual({ x: 220, y: 180 });
+    const character = (
+      await request(`/api/projects/${project.id}/characters`, { name: 'Лесник' })
+    ).json();
+    await command({ type: 'set-character', nodeId: line.id, characterId: character.id });
+    expect((await read()).nodes.find((n: { id: string }) => n.id === line.id).characterId).toBe(
+      character.id,
+    );
+    await command({ type: 'set-character', nodeId: choice.id, characterId: character.id }, 'error');
+    const second = await request(`/api/projects/${project.id}/dialogues`, {
+      name: 'Второй разговор',
+    });
+    expect(second.statusCode).toBe(201);
+    const secondGraph = (await request(`/api/dialogues/${second.json().id}`)).json();
+    expect(secondGraph.nodes).toMatchObject([{ kind: 'start' }]);
+    expect(secondGraph.edges).toEqual([]);
+    expect((await request(`/api/projects/${project.id}`)).json()).toMatchObject({
+      characters: [{ id: character.id, name: 'Лесник' }],
+    });
+    const foreign = (
+      await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Other project' } })
+    ).json();
+    expect(
+      (await request(`/api/projects/${foreign.id}/dialogues`, { name: 'Denied' })).statusCode,
+    ).toBe(403);
+    expect(
+      (await request(`/api/projects/${foreign.id}/characters`, { name: 'Denied' })).statusCode,
+    ).toBe(403);
+    await command({ type: 'delete-node', nodeId: startId }, 'error');
+    a.send({ type: 'open-text', nodeId: line.id });
+    await a.next('text-state');
+    await command({ type: 'delete-node', nodeId: line.id });
+    // Text already in flight may be saved, but cannot recreate the deleted node.
+    const doc = new Y.Doc();
+    doc.getText('text').insert(0, 'Поздний ввод');
+    await command({
+      type: 'text-update',
+      nodeId: line.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64'),
+    });
+    doc.destroy();
+    const after = await read();
+    expect(after.nodes.some((n: { id: string }) => n.id === line.id)).toBe(false);
+    expect(after.edges).toEqual([]);
+    b.send({ type: 'open-text', nodeId: line.id });
+    await b.next('error');
+  } finally {
+    a.socket.terminate();
+    b.socket.terminate();
+  }
+});
+
+test('concurrent incompatible branches accept exactly one command', async () => {
+  const project = (
+    await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Concurrent graph' },
+    })
+  ).json();
+  currentDialogue = project.dialogueId;
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.editorToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  const initial = (
+    await app.inject({ url: `/api/dialogues/${currentDialogue}`, headers: { cookie } })
+  ).json();
+  const targets = [];
+  for (const kind of ['line', 'choice'])
+    targets.push(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/dialogues/${currentDialogue}/nodes`,
+          headers: { cookie },
+          payload: { kind, x: 300, y: 100 },
+        })
+      ).json().id,
+    );
+  const a = connect(cookie),
+    b = connect(cookie);
+  try {
+    await Promise.all([a.next('ready'), b.next('ready')]);
+    a.send({
+      type: 'connect-edge',
+      operationId: crypto.randomUUID(),
+      edgeId: crypto.randomUUID(),
+      source: initial.nodes[0].id,
+      target: targets[0],
+    });
+    b.send({
+      type: 'connect-edge',
+      operationId: crypto.randomUUID(),
+      edgeId: crypto.randomUUID(),
+      source: initial.nodes[0].id,
+      target: targets[1],
+    });
+    await Promise.all([a.next('graph'), b.next('graph')]);
+    const graph = (
+      await app.inject({ url: `/api/dialogues/${currentDialogue}`, headers: { cookie } })
+    ).json();
+    const winner = graph.edges[0].target === targets[0] ? a : b;
+    const loser = winner === a ? b : a;
+    await Promise.all([winner.next('saved'), loser.next('error')]);
+    expect(graph.edges).toHaveLength(1);
+  } finally {
+    a.socket.terminate();
+    b.socket.terminate();
+  }
+});
+
+test('character colours are distinct by default, editable, persistent and project-scoped', async () => {
+  const project = (
+    await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Character colours' },
+    })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.editorToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  const post = (url: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url, payload, headers: { cookie } });
+  const a = (await post(`/api/projects/${project.id}/characters`, { name: 'Аня' })).json();
+  const b = (await post(`/api/projects/${project.id}/characters`, { name: 'Борис' })).json();
+  expect(a.color).not.toBe(b.color);
+  const changed = await post(`/api/projects/${project.id}/characters/${a.id}/color`, {
+    color: '#487FBD',
+  });
+  expect(changed.json().color).toBe('#487fbd');
+  expect(
+    (await post(`/api/projects/${project.id}/characters/${a.id}/color`, { color: 'red; invalid' }))
+      .statusCode,
+  ).toBe(400);
+  const other = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Private palette' } })
+  ).json();
+  expect(
+    (await post(`/api/projects/${other.id}/characters/${a.id}/color`, { color: '#ffffff' }))
+      .statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await post(`/api/projects/${project.id}/characters/${crypto.randomUUID()}/color`, {
+        color: '#ffffff',
+      })
+    ).statusCode,
+  ).toBe(403);
+  const reopened = (
+    await app.inject({ url: `/api/projects/${project.id}`, headers: { cookie } })
+  ).json();
+  expect(reopened.characters).toEqual(expect.arrayContaining([{ ...a, color: '#487fbd' }, b]));
+});

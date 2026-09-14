@@ -17,6 +17,12 @@ export async function openDatabase(
     await client.query(
       await readFile(new URL('./migrations/002-graph-operations.sql', import.meta.url), 'utf8'),
     );
+    await client.query(
+      await readFile(new URL('./migrations/003-graph-and-characters.sql', import.meta.url), 'utf8'),
+    );
+    await client.query(
+      await readFile(new URL('./migrations/004-character-colors.sql', import.meta.url), 'utf8'),
+    );
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');

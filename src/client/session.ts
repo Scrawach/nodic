@@ -1,13 +1,13 @@
 import * as Y from 'yjs';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { entries, set, del } from 'idb-keyval';
-import { decodeBytes, encodeBytes, type MoveNodes } from '../shared/protocol';
-import type { DialogueNode } from '../shared/model';
+import { decodeBytes, encodeBytes, type MoveNodes, type GraphCommand } from '../shared/protocol';
+import type { DialogueNode, DialogueEdge } from '../shared/model';
 
 const REMOTE = Symbol('remote');
 type Pending =
   | { type: 'text-update'; nodeId: string; operationId: string; data: string }
-  | (MoveNodes & { order: number });
+  | (GraphCommand & { order: number });
 export interface TextHandle {
   doc: Y.Doc;
   undo: Y.UndoManager;
@@ -19,6 +19,9 @@ interface SessionState {
   status: string;
   peers: number;
   nodes: DialogueNode[];
+  edges: DialogueEdge[];
+  projectVersion: number;
+  notice: string;
   version: number;
 }
 
@@ -39,6 +42,9 @@ export class DialogueSession {
     status: 'Подключение…',
     peers: 0,
     nodes: [],
+    edges: [],
+    projectVersion: 0,
+    notice: '',
     version: 0,
   };
 
@@ -93,8 +99,8 @@ export class DialogueSession {
       );
       stored.sort(
         (a, b) =>
-          (a[1].type === 'move-nodes' ? a[1].order : 0) -
-          (b[1].type === 'move-nodes' ? b[1].order : 0),
+          (a[1].type !== 'text-update' ? a[1].order : 0) -
+          (b[1].type !== 'text-update' ? b[1].order : 0),
       );
       for (const [, value] of stored) {
         this.pending.set(value.operationId, value);
@@ -127,11 +133,31 @@ export class DialogueSession {
       if (message.type === 'ready') {
         this.failed = false;
         this.sentMove = undefined;
-        this.update({ connected: true, nodes: message.nodes || [] });
+        this.update({
+          connected: true,
+          nodes: message.nodes || [],
+          edges: message.edges || [],
+          projectVersion: this.state.projectVersion + 1,
+        });
         this.flushMove();
-        for (const nodeId of this.texts.keys()) this.send({ type: 'open-text', nodeId });
+        for (const nodeId of this.texts.keys()) {
+          if (this.state.nodes.some((n) => n.id === nodeId))
+            this.send({ type: 'open-text', nodeId });
+          else
+            for (const pending of this.pending.values())
+              if (
+                pending.type === 'text-update' &&
+                pending.nodeId === nodeId &&
+                this.durable.has(pending.operationId)
+              )
+                this.send(pending);
+        }
         this.status();
       } else if (message.type === 'peers') this.update({ peers: message.count });
+      else if (message.type === 'project-changed')
+        this.update({ projectVersion: this.state.projectVersion + 1 });
+      else if (message.type === 'graph')
+        this.update({ nodes: message.nodes, edges: message.edges });
       else if (message.type === 'positions')
         this.update({
           nodes: this.state.nodes.map((node) => {
@@ -185,8 +211,25 @@ export class DialogueSession {
             this.status();
           });
       } else if (message.type === 'error') {
-        this.failed = true;
-        this.update({ status: message.message });
+        const operation = this.pending.get(message.operationId);
+        if (message.rejected && operation && operation.type !== 'text-update') {
+          void del(this.outboxPrefix + message.operationId)
+            .then(() => {
+              this.pending.delete(message.operationId);
+              this.durable.delete(message.operationId);
+              if (this.sentMove === message.operationId) this.sentMove = undefined;
+              this.update({ notice: message.message });
+              this.flushMove();
+              this.status();
+            })
+            .catch(() => {
+              this.failed = true;
+              this.status();
+            });
+        } else {
+          this.failed = true;
+          this.update({ status: message.message });
+        }
       }
     };
     socket.onclose = () => {
@@ -208,19 +251,17 @@ export class DialogueSession {
   }
   private flushMove() {
     if (!this.state.connected || this.stopped || this.failed || this.sentMove) return;
-    const move = [...this.pending.values()].find((p) => p.type === 'move-nodes');
+    const move = [...this.pending.values()].find((p) => p.type !== 'text-update');
     if (!move || !this.durable.has(move.operationId)) return;
     this.sentMove = move.operationId;
     this.send(move);
   }
   moveNodes(positions: MoveNodes['positions']) {
+    this.command({ type: 'move-nodes', operationId: crypto.randomUUID(), positions });
+  }
+  command(command: GraphCommand) {
     if (!this.canMove()) return;
-    const message: Pending = {
-      type: 'move-nodes',
-      operationId: crypto.randomUUID(),
-      positions,
-      order: ++this.moveOrder,
-    };
+    const message: Pending = { ...command, order: ++this.moveOrder };
     this.pending.set(message.operationId, message);
     this.status();
     void set(this.outboxPrefix + message.operationId, message)
@@ -232,6 +273,9 @@ export class DialogueSession {
         this.failed = true;
         this.status();
       });
+  }
+  clearNotice() {
+    this.update({ notice: '' });
   }
   canMove() {
     return this.state.connected && !this.failed;

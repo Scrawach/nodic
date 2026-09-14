@@ -4,6 +4,8 @@ import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import type { DialogueSession } from './session';
+import { characterColors, type Project, type Character } from '../shared/model';
+import { api } from './api';
 
 const editability = (enabled: boolean) => [
   EditorView.editable.of(enabled),
@@ -15,12 +17,31 @@ export function TextEditor({
   session,
   nodeId,
   close,
+  project,
+  onCharacterChanged,
 }: {
   session: DialogueSession;
   nodeId: string;
   close: () => void;
+  project: Project;
+  onCharacterChanged: (character: Character) => void;
 }) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const [addingCharacter, setAddingCharacter] = useState(false);
+  const [characterName, setCharacterName] = useState('');
+  const [newColor, setNewColor] = useState(
+    characterColors.find((color) => !project.characters.some((c) => c.color === color)) ||
+      characterColors[0],
+  );
+  const [colorDraft, setColorDraft] = useState(characterColors[0]);
+  const [savingColor, setSavingColor] = useState(false);
+  const [characterError, setCharacterError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const node = state.nodes.find((n) => n.id === nodeId);
+  const character = project.characters.find((c) => c.id === node?.characterId);
+  useEffect(() => {
+    if (character) setColorDraft(character.color);
+  }, [character?.id, character?.color]);
   const [handle] = useState(() => session.openText(nodeId));
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(null);
@@ -91,11 +112,133 @@ export function TextEditor({
           </button>
         </div>
         <div className="editor-meta">
-          <span>Без персонажа</span>
+          {node?.kind === 'line' ? (
+            <div className="character-controls">
+              <label>
+                Персонаж
+                <select
+                  aria-label="Персонаж"
+                  disabled={!session.canMove()}
+                  value={node.characterId || ''}
+                  onChange={(event) =>
+                    session.command({
+                      type: 'set-character',
+                      operationId: crypto.randomUUID(),
+                      nodeId,
+                      characterId: event.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">Без персонажа</option>
+                  {project.characters.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {character && (
+                <div className="character-color-controls">
+                  <label>
+                    Цвет персонажа
+                    <input
+                      type="color"
+                      aria-label="Цвет персонажа"
+                      value={colorDraft}
+                      disabled={!session.canMove() || savingColor}
+                      onChange={(e) => setColorDraft(e.target.value)}
+                    />
+                  </label>
+                  <button
+                    disabled={!session.canMove() || savingColor || colorDraft === character.color}
+                    onClick={() => {
+                      setSavingColor(true);
+                      setCharacterError('');
+                      void api<Character>(
+                        `/projects/${project.id}/characters/${character.id}/color`,
+                        { color: colorDraft },
+                      )
+                        .then(onCharacterChanged)
+                        .catch((e) => setCharacterError(e.message))
+                        .finally(() => setSavingColor(false));
+                    }}
+                  >
+                    {savingColor ? 'Сохраняем…' : 'Сохранить цвет'}
+                  </button>
+                </div>
+              )}
+              <button
+                disabled={!session.canMove()}
+                onClick={() => {
+                  setNewColor(
+                    characterColors.find(
+                      (color) => !project.characters.some((c) => c.color === color),
+                    ) || characterColors[project.characters.length % characterColors.length],
+                  );
+                  setAddingCharacter((v) => !v);
+                }}
+              >
+                ＋ Новый персонаж
+              </button>
+            </div>
+          ) : (
+            <span>Выбор игрока</span>
+          )}
           <span data-testid="editor-presence">
             В редакторе: {handle.awareness.getStates().size}
           </span>
         </div>
+        {addingCharacter && (
+          <form
+            className="character-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setCreating(true);
+              setCharacterError('');
+              void api<Character>(`/projects/${project.id}/characters`, {
+                name: characterName,
+                color: newColor,
+              })
+                .then((character) => {
+                  onCharacterChanged(character);
+                  session.command({
+                    type: 'set-character',
+                    operationId: crypto.randomUUID(),
+                    nodeId,
+                    characterId: character.id,
+                  });
+                  setAddingCharacter(false);
+                  setCharacterName('');
+                })
+                .catch((e) => setCharacterError(e.message))
+                .finally(() => setCreating(false));
+            }}
+          >
+            <label>
+              Имя персонажа
+              <input
+                autoFocus
+                required
+                maxLength={120}
+                value={characterName}
+                onChange={(e) => setCharacterName(e.target.value)}
+              />
+            </label>
+            <label>
+              Цвет нового персонажа
+              <input
+                type="color"
+                aria-label="Цвет нового персонажа"
+                value={newColor}
+                onChange={(e) => setNewColor(e.target.value)}
+              />
+            </label>
+            <button disabled={creating || !characterName.trim() || !session.canMove()}>
+              Создать персонажа
+            </button>
+          </form>
+        )}
+        {characterError && <p role="alert">{characterError}</p>}
         {!handle.loaded && <p className="muted">Подключаем редактор…</p>}
         <div ref={host} className="text-editor" />
         <footer className="editor-footer">

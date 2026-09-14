@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useSyncExternalStore } from 'react';
+import { type CSSProperties, memo, useEffect, useState, useSyncExternalStore } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -16,6 +16,7 @@ import '@xyflow/react/dist/style.css';
 import { api } from './api';
 import { DialogueSession } from './session';
 import { TextEditor } from './TextEditor';
+import { StoryEdge } from './StoryEdge';
 import type { DialogueNode, Project, NodeKind } from '../shared/model';
 import './style.css';
 
@@ -45,40 +46,66 @@ const names: Record<NodeKind, string> = {
   choice: 'Вариант',
   end: 'Конец',
 };
-const StoryNode = memo(({ data }: NodeProps<Node<{ story: DialogueNode }>>) => {
-  const n = data.story;
-  return (
-    <div className={`story-node kind-${n.kind}`} data-testid={`node-${n.kind}`}>
-      {n.kind !== 'start' && <Handle type="target" position={Position.Left} />}
-      <div className="node-label">
-        <span>
-          {n.kind === 'choice' ? '◇' : n.kind === 'start' ? '↗' : n.kind === 'end' ? '◼' : '≋'}
-        </span>
-        {names[n.kind]}
-      </div>
-      {(n.kind === 'line' || n.kind === 'choice') && (
-        <>
-          <div className="node-character">
-            {n.kind === 'line' ? 'Без персонажа' : 'Выбор игрока'}
+const StoryNode = memo(
+  ({
+    data,
+  }: NodeProps<Node<{ story: DialogueNode; characterName?: string; characterColor?: string }>>) => {
+    const n = data.story;
+    return (
+      <div
+        className={`story-node kind-${n.kind}${n.kind === 'line' && data.characterColor ? ' has-character' : ''}`}
+        data-testid={`node-${n.kind}`}
+        style={
+          n.kind === 'line' && data.characterColor
+            ? ({ '--character-color': data.characterColor } as CSSProperties)
+            : undefined
+        }
+      >
+        {n.kind === 'choice' && (
+          <svg className="choice-shape" viewBox="0 0 270 180" aria-hidden="true">
+            <path d="M 128 12 Q 135 2 142 12 L 260 165 Q 269 176 254 176 L 16 176 Q 1 176 10 165 Z" />
+          </svg>
+        )}
+        {n.kind !== 'start' && <Handle type="target" position={Position.Left} aria-label="Вход" />}
+        {n.kind !== 'choice' && (
+          <div className="node-label">
+            <span>{n.kind === 'start' ? '↗' : n.kind === 'end' ? '◼' : '≋'}</span>
+            {names[n.kind]}
           </div>
-          <p>{n.preview || 'Двойной клик, чтобы написать…'}</p>
-        </>
-      )}
-      {n.kind !== 'end' && <Handle type="source" position={Position.Right} />}
-    </div>
-  );
-});
+        )}
+        {(n.kind === 'line' || n.kind === 'choice') && (
+          <>
+            {n.kind === 'line' && (
+              <div className="node-character">{data.characterName || 'Без персонажа'}</div>
+            )}
+            <p>{n.preview || (n.kind === 'line' ? 'Двойной клик, чтобы написать…' : '')}</p>
+          </>
+        )}
+        {n.kind !== 'end' && <Handle type="source" position={Position.Right} aria-label="Выход" />}
+      </div>
+    );
+  },
+);
 const nodeTypes = { story: StoryNode };
+const edgeTypes = { story: StoryEdge };
+const icons: Record<NodeKind, string> = { start: '↗', line: '≋', choice: '△', end: '◼' };
 
-function Board({ project, dialogueId }: { project: Project; dialogueId: string }) {
+function Board({ project: initialProject, dialogueId }: { project: Project; dialogueId: string }) {
+  const [project, setProject] = useState(initialProject);
+  const [newDialogue, setNewDialogue] = useState(false);
+  const [dialogueName, setDialogueName] = useState('');
+  const [selectedEdge, setSelectedEdge] = useState<string>();
+  const [creatingDialogue, setCreatingDialogue] = useState(false);
   const [session] = useState(() => new DialogueSession(dialogueId));
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [editor, setEditor] = useState<string>();
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState('');
-  const [menu, setMenu] = useState<{ x: number; y: number }>();
+  const [menu, setMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string }>();
   const flow = useReactFlow();
-  const [boardNodes, setBoardNodes] = useState<Node<{ story: DialogueNode }>[]>([]);
+  const [boardNodes, setBoardNodes] = useState<
+    Node<{ story: DialogueNode; characterName?: string; characterColor?: string }>[]
+  >([]);
   useEffect(() => {
     setBoardNodes((current) =>
       state.nodes.map((n) => {
@@ -87,13 +114,36 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
           ...prior,
           id: n.id,
           type: 'story',
-          data: { story: n },
+          data: {
+            story: n,
+            characterName: project.characters.find((c) => c.id === n.characterId)?.name,
+            characterColor: project.characters.find((c) => c.id === n.characterId)?.color,
+          },
           position: prior?.dragging && state.connected ? prior.position : { x: n.x, y: n.y },
           dragging: state.connected && prior?.dragging,
         };
       }),
     );
-  }, [state.nodes, state.connected]);
+  }, [state.nodes, state.connected, project.characters]);
+  useEffect(() => {
+    let cancelled = false;
+    void api<Project>(`/projects/${project.id}`)
+      .then((p) => {
+        if (!cancelled) setProject(p);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.projectVersion, project.id]);
+  useEffect(() => {
+    if (editor && state.connected && !state.nodes.some((n) => n.id === editor)) {
+      setEditor(undefined);
+      setError('Нода удалена. Редактор закрыт.');
+    }
+  }, [editor, state.nodes, state.connected]);
   useEffect(() => () => session.destroy(), [session]);
   const add = async (kind: Exclude<NodeKind, 'start'>, point?: { x: number; y: number }) => {
     if (!state.connected) return;
@@ -128,6 +178,13 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
             {d.name}
           </a>
         ))}
+        <button
+          className="new-dialogue"
+          disabled={!state.connected}
+          onClick={() => setNewDialogue(true)}
+        >
+          ＋ Новый диалог
+        </button>
         <div className="sidebar-foot">
           <span className="status-dot" />
           Общая история начинается здесь
@@ -161,11 +218,52 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
               (nodes.length ? nodes : [node]).map((n) => ({ nodeId: n.id, ...n.position })),
             )
           }
-          edges={[]}
+          edges={state.edges.map((edge) => ({
+            ...edge,
+            type: 'story',
+            selected: edge.id === selectedEdge,
+            data: {
+              bend: edge.bend,
+              editable: session.canMove(),
+              select: () => setSelectedEdge(edge.id),
+              save: (bend: { x: number; y: number } | null) =>
+                session.command({
+                  type: 'bend-edge',
+                  operationId: crypto.randomUUID(),
+                  edgeId: edge.id,
+                  bend,
+                }),
+            },
+          }))}
+          edgeTypes={edgeTypes}
+          onEdgesChange={(changes) => {
+            for (const c of changes)
+              if (c.type === 'select')
+                setSelectedEdge((id) => (c.selected ? c.id : id === c.id ? undefined : id));
+          }}
+          onConnect={(connection) =>
+            session.command({
+              type: 'connect-edge',
+              operationId: crypto.randomUUID(),
+              edgeId: crypto.randomUUID(),
+              source: connection.source,
+              target: connection.target,
+            })
+          }
+          onNodeContextMenu={(event, node) => {
+            event.preventDefault();
+            setMenu({ x: event.clientX, y: event.clientY, nodeId: node.id });
+          }}
+          onEdgeContextMenu={(event, edge) => {
+            event.preventDefault();
+            setSelectedEdge(edge.id);
+            setMenu({ x: event.clientX, y: event.clientY, edgeId: edge.id });
+          }}
           nodeTypes={nodeTypes}
           nodesDraggable={session.canMove()}
           deleteKeyCode={null}
-          nodesConnectable={false}
+          nodesConnectable={session.canMove()}
+          connectionRadius={28}
           zoomOnDoubleClick={false}
           fitView
           fitViewOptions={{ maxZoom: 1 }}
@@ -175,7 +273,10 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
             if (node.data.story.kind === 'line' || node.data.story.kind === 'choice')
               setEditor(node.id);
           }}
-          onPaneClick={() => setMenu(undefined)}
+          onPaneClick={() => {
+            setMenu(undefined);
+            setSelectedEdge(undefined);
+          }}
           onPaneContextMenu={(event) => {
             event.preventDefault();
             setMenu({ x: event.clientX, y: event.clientY });
@@ -185,28 +286,20 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
           <MiniMap nodeColor="#85a592" pannable zoomable />
           <Controls showInteractive={false} />
         </ReactFlow>
-        <div className="node-toolbar">
-          <span>ДОБАВИТЬ</span>
-          <button
-            disabled={!state.connected}
-            aria-label="Добавить реплику"
-            onClick={() => void add('line')}
-          >
-            ≋ Реплика
-          </button>
-          <button disabled={!state.connected} onClick={() => void add('choice')}>
-            ◇ Вариант
-          </button>
-          <button disabled={!state.connected} onClick={() => void add('end')}>
-            ◼ Конец
-          </button>
-        </div>
         <div className="canvas-caption">
-          Колесо — масштаб · Перетаскивание поля — навигация · Двойной клик — текст
+          ПКМ — добавить ноду · Shift — выделить группу · Двойной клик — текст · Потяните связь —
+          изменить кривую
         </div>
-        {error && (
-          <div role="alert" className="error-toast" onClick={() => setError('')}>
-            {error}
+        {(error || state.notice) && (
+          <div
+            role="alert"
+            className="error-toast"
+            onClick={() => {
+              setError('');
+              session.clearNotice();
+            }}
+          >
+            {error || state.notice}
           </div>
         )}
         {menu && (
@@ -217,11 +310,60 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
               top: Math.min(menu.y, innerHeight - 160),
             }}
           >
-            {(['line', 'choice', 'end'] as const).map((kind) => (
-              <button key={kind} onClick={() => void add(kind, menu)}>
-                {names[kind]}
+            {menu.nodeId ? (
+              <button
+                disabled={
+                  !session.canMove() ||
+                  state.nodes.find((n) => n.id === menu.nodeId)?.kind === 'start'
+                }
+                onClick={() => {
+                  session.command({
+                    type: 'delete-node',
+                    operationId: crypto.randomUUID(),
+                    nodeId: menu.nodeId!,
+                  });
+                  setMenu(undefined);
+                }}
+              >
+                ⌫ Удалить ноду
               </button>
-            ))}
+            ) : menu.edgeId ? (
+              <>
+                <button
+                  disabled={!session.canMove()}
+                  onClick={() => {
+                    session.command({
+                      type: 'bend-edge',
+                      operationId: crypto.randomUUID(),
+                      edgeId: menu.edgeId!,
+                      bend: null,
+                    });
+                    setMenu(undefined);
+                  }}
+                >
+                  ⌁ Сбросить форму
+                </button>
+                <button
+                  disabled={!session.canMove()}
+                  onClick={() => {
+                    session.command({
+                      type: 'delete-edge',
+                      operationId: crypto.randomUUID(),
+                      edgeId: menu.edgeId!,
+                    });
+                    setMenu(undefined);
+                  }}
+                >
+                  ⌫ Удалить связь
+                </button>
+              </>
+            ) : (
+              (['line', 'choice', 'end'] as const).map((kind) => (
+                <button key={kind} disabled={!state.connected} onClick={() => void add(kind, menu)}>
+                  <span aria-hidden="true">{icons[kind]}</span> {names[kind]}
+                </button>
+              ))
+            )}
           </div>
         )}
       </main>
@@ -229,9 +371,63 @@ function Board({ project, dialogueId }: { project: Project; dialogueId: string }
         <TextEditor
           key={editor}
           session={session}
+          project={project}
+          onCharacterChanged={(character) =>
+            setProject((p) => ({
+              ...p,
+              characters: [...p.characters.filter((c) => c.id !== character.id), character],
+            }))
+          }
           nodeId={editor}
           close={() => setEditor(undefined)}
         />
+      )}
+      {newDialogue && (
+        <div className="modal-backdrop">
+          <form
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Новый диалог"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setCreatingDialogue(true);
+              void api<{ id: string }>(`/projects/${project.id}/dialogues`, { name: dialogueName })
+                .then((d) => {
+                  location.href = `/p/${project.id}/d/${d.id}`;
+                })
+                .catch((e) => {
+                  setError(e.message);
+                  setCreatingDialogue(false);
+                });
+            }}
+          >
+            <div className="modal-heading">
+              <h2>Новый диалог</h2>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Закрыть"
+                onClick={() => setNewDialogue(false)}
+              >
+                ×
+              </button>
+            </div>
+            <label>
+              Название диалога
+              <input
+                autoFocus
+                required
+                maxLength={120}
+                value={dialogueName}
+                onChange={(e) => setDialogueName(e.target.value)}
+              />
+            </label>
+            <button className="primary" disabled={creatingDialogue || !dialogueName.trim()}>
+              {creatingDialogue ? 'Создаём…' : 'Создать диалог'}
+            </button>
+          </form>
+        </div>
       )}
       {sharing && (
         <div className="modal-backdrop">

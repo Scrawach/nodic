@@ -421,18 +421,55 @@ label input {
   justify-content: center;
 }
 .kind-choice {
-  border-color: #d6bd9a;
-  background: #fff9ed;
-  border-radius: 3px 20px 3px 20px;
+  position: relative;
+  width: 270px;
+  height: 180px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
-.kind-choice .node-label {
-  color: #ac834e;
+.choice-shape {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  overflow: visible;
+}
+.choice-shape path {
+  fill: #fff9ed;
+  stroke: #c5a573;
+  stroke-width: 2;
+}
+.kind-choice .react-flow__handle-left {
+  left: 25%;
+}
+.kind-choice .react-flow__handle-right {
+  right: 25%;
+}
+.kind-choice p {
+  position: absolute;
+  top: 100px;
+  left: 60px;
+  width: 150px;
+  padding: 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 54px;
+}
+.kind-line.has-character {
+  background: color-mix(in srgb, var(--character-color) 24%, #fffef8);
+  border-color: var(--character-color);
+}
+.kind-line.has-character .react-flow__handle {
+  background: var(--character-color);
 }
 .react-flow__handle {
   background: #819666;
   border: 2px solid #fffefa;
-  width: 9px;
-  height: 9px;
+  width: 20px;
+  height: 20px;
 }
 .react-flow__minimap {
   border: 1px solid #d9dfcf;
@@ -452,38 +489,10 @@ label input {
   border-color: #e4e9dc !important;
   color: #6a785d !important;
 }
-.node-toolbar {
-  position: absolute;
-  z-index: 3;
-  bottom: 30px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid #d8dfce;
-  background: #fcfdf8;
-  padding: 7px 10px;
-  border-radius: 10px;
-  box-shadow: 0 4px 18px #29391a08;
-  white-space: nowrap;
-}
-.node-toolbar > span {
-  font-size: 8px;
-  letter-spacing: 1px;
-  color: #9aa68b;
-  margin: 0 8px;
-}
-.node-toolbar button {
-  border: 0;
-  background: transparent;
-  font-size: 10px;
-  padding: 9px 10px;
-}
 .canvas-caption {
   position: absolute;
-  left: 30px;
-  bottom: 94px;
+  left: 80px;
+  bottom: 34px;
   font-size: 9px;
   color: #a0a893;
   pointer-events: none;
@@ -643,4 +652,85 @@ label input {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+.react-flow__node.selected .story-node:not(.kind-choice) {
+  border: 2px solid #b16a25;
+  box-shadow: 0 0 0 4px #d496493b;
+}
+.react-flow__node.selected .choice-shape path {
+  stroke: #b16a25;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 3px #d4964980);
+}
+.react-flow__handle:hover,
+.react-flow__handle.connectingto {
+  background: #b16a25;
+  box-shadow: 0 0 0 5px #d496493b;
+}
+.story-edge {
+  cursor: grab;
+}
+.story-edge:active {
+  cursor: grabbing;
+}
+.story-edge.is-selected .react-flow__edge-path {
+  filter: drop-shadow(0 0 3px #d4964980);
+}
+.new-dialogue {
+  width: 100%;
+  margin-top: 15px;
+}
+.character-controls,
+.character-form {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+.character-form {
+  margin: 0 0 16px;
+  flex-wrap: wrap;
+}
+.character-controls label {
+  min-width: 190px;
+}
+select {
+  display: block;
+  margin-top: 6px;
+  font: inherit;
+  color: #354637;
+  padding: 8px;
+  background: #fffefa;
+  border: 1px solid #d1d7cb;
+  border-radius: 6px;
+  width: 100%;
+}
+.modal > .primary {
+  margin-top: 18px;
+}
+.context-menu button span {
+  display: inline-block;
+  width: 22px;
+  font-size: 18px;
+  vertical-align: middle;
+}
+
+.character-controls {
+  flex-wrap: wrap;
+  align-items: end;
+}
+.character-color-controls {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+.character-color-controls label {
+  min-width: 0;
+}
+input[type='color'] {
+  display: block;
+  width: 52px;
+  height: 36px;
+  padding: 3px;
+  cursor: pointer;
 }

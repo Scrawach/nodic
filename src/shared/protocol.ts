@@ -4,7 +4,7 @@ const encoded = z
   .string()
   .max(1_500_000)
   .regex(/^[A-Za-z0-9+/]*={0,2}$/);
-export const clientMessage = z.discriminatedUnion('type', [
+export const graphCommand = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('move-nodes'),
     operationId: z.uuid(),
@@ -13,6 +13,31 @@ export const clientMessage = z.discriminatedUnion('type', [
       .min(1)
       .max(1000),
   }),
+  z.object({
+    type: z.literal('connect-edge'),
+    operationId: z.uuid(),
+    edgeId: z.uuid(),
+    source: z.uuid(),
+    target: z.uuid(),
+  }),
+  z.object({
+    type: z.literal('bend-edge'),
+    operationId: z.uuid(),
+    edgeId: z.uuid(),
+    bend: z.object({ x: z.number().finite(), y: z.number().finite() }).nullable(),
+  }),
+  z.object({ type: z.literal('delete-edge'), operationId: z.uuid(), edgeId: z.uuid() }),
+  z.object({ type: z.literal('delete-node'), operationId: z.uuid(), nodeId: z.uuid() }),
+  z.object({
+    type: z.literal('set-character'),
+    operationId: z.uuid(),
+    nodeId: z.uuid(),
+    characterId: z.uuid().nullable(),
+  }),
+]);
+export type GraphCommand = z.infer<typeof graphCommand>;
+export const clientMessage = z.discriminatedUnion('type', [
+  ...graphCommand.options,
   z.object({ type: z.literal('open-text'), nodeId: z.uuid() }),
   z.object({
     type: z.literal('text-update'),
