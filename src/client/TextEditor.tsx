@@ -119,7 +119,7 @@ export function TextEditor({
                 <select
                   aria-label="Персонаж"
                   disabled={!session.canMove()}
-                  value={node.characterId || ''}
+                  value={node.characterMissing ? '__missing' : node.characterId || ''}
                   onChange={(event) =>
                     session.command({
                       type: 'set-character',
@@ -129,6 +129,11 @@ export function TextEditor({
                     })
                   }
                 >
+                  {node.characterMissing && (
+                    <option value="__missing" disabled>
+                      Неизвестный персонаж
+                    </option>
+                  )}
                   <option value="">Без персонажа</option>
                   {project.characters.map((c) => (
                     <option key={c.id} value={c.id}>

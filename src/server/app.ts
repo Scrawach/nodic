@@ -92,7 +92,7 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
         [dialogueId],
       );
       const result = await client.query(
-        'SELECT id,kind,x,y,character_id AS "characterId",text_state FROM nodes WHERE dialogue_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY id FOR SHARE',
+        'SELECT id,kind,x,y,character_id AS "characterId",character_missing AS "characterMissing",text_state FROM nodes WHERE dialogue_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY id FOR SHARE',
         [dialogueId, nodeIds],
       );
       if (result.rows.length !== new Set(nodeIds).size)
@@ -203,6 +203,50 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
     );
     if (result.created) await live.notifyProject(projectId);
     return reply.code(201).send(result.value);
+  });
+  app.post('/api/projects/:projectId/characters/:characterId/rename', async (request) => {
+    const { projectId, characterId } = z
+      .object({ projectId: z.uuid(), characterId: z.uuid() })
+      .parse(request.params);
+    await requireProject(pool, request, projectId);
+    const { name } = z.object({ name: z.string().trim().min(1).max(120) }).parse(request.body);
+    const result = await pool.query(
+      'UPDATE characters SET name=$3 WHERE id=$1 AND project_id=$2 RETURNING id,name,color',
+      [characterId, projectId, name],
+    );
+    if (!result.rows[0]) throw new AccessError('Персонаж недоступен в этом проекте.');
+    await live.notifyProject(projectId);
+    return result.rows[0];
+  });
+  app.post('/api/projects/:projectId/characters/:characterId/delete', async (request) => {
+    const { projectId, characterId } = z
+      .object({ projectId: z.uuid(), characterId: z.uuid() })
+      .parse(request.params);
+    await requireProject(pool, request, projectId);
+    await transaction(pool, async (client) => {
+      // Graph commands lock the dialogue before characters. Keep that order to
+      // serialize assignment/deletion without deadlocking connected authors.
+      await client.query('SELECT id FROM dialogues WHERE project_id=$1 ORDER BY id FOR UPDATE', [
+        projectId,
+      ]);
+      const character = await client.query(
+        'SELECT id FROM characters WHERE id=$1 AND project_id=$2 FOR UPDATE',
+        [characterId, projectId],
+      );
+      if (!character.rows.length) return; // Repeating a completed deletion is harmless.
+      const version = randomUUID();
+      await client.query(
+        "INSERT INTO graph_field_versions(dialogue_id,field,version) SELECT dialogue_id,'character:' || id::text,$2 FROM nodes WHERE character_id=$1 ON CONFLICT (dialogue_id,field) DO UPDATE SET version=EXCLUDED.version",
+        [characterId, version],
+      );
+      await client.query(
+        'UPDATE nodes SET character_id=NULL,character_missing=true WHERE character_id=$1',
+        [characterId],
+      );
+      await client.query('DELETE FROM characters WHERE id=$1', [characterId]);
+    });
+    await live.notifyProject(projectId, true);
+    return { deleted: true };
   });
   app.post('/api/projects/:projectId/characters/:characterId/color', async (request) => {
     const { projectId, characterId } = z

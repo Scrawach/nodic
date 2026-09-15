@@ -18,6 +18,7 @@ import { storeFragment, pastedFragment } from './clipboard';
 import type { GraphFragment } from '../shared/protocol';
 import { DialogueSession } from './session';
 import { TextEditor } from './TextEditor';
+import { Characters } from './Characters';
 import { StoryEdge } from './StoryEdge';
 import type { DialogueNode, Project, NodeKind } from '../shared/model';
 import './style.css';
@@ -78,7 +79,10 @@ const StoryNode = memo(
         {(n.kind === 'line' || n.kind === 'choice') && (
           <>
             {n.kind === 'line' && (
-              <div className="node-character">{data.characterName || 'Без персонажа'}</div>
+              <div className="node-character">
+                {data.characterName ||
+                  (n.characterMissing ? 'Неизвестный персонаж' : 'Без персонажа')}
+              </div>
             )}
             <p>{n.preview || (n.kind === 'line' ? 'Двойной клик, чтобы написать…' : '')}</p>
           </>
@@ -235,6 +239,7 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
         </a>
         <div className="project-label">ПРОЕКТ</div>
         <h1>{project.name}</h1>
+        <a href={`/p/${project.id}/characters`}>Персонажи</a>
         <div className="sidebar-rule" />
         <div className="section-label">
           Диалоги <span>{project.dialogues.length.toString().padStart(2, '0')}</span>
@@ -574,7 +579,7 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
 }
 
 export function App() {
-  const match = location.pathname.match(/^\/p\/([^/]+)(?:\/d\/([^/]+))?$/);
+  const match = location.pathname.match(/^\/p\/([^/]+)(?:\/d\/([^/]+)|\/(characters))?$/);
   const [project, setProject] = useState<Project>();
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -630,13 +635,17 @@ export function App() {
   }
   if (match)
     return project ? (
-      <ReactFlowProvider>
-        <Board
-          key={match[2] || project.dialogues[0].id}
-          project={project}
-          dialogueId={match[2] || project.dialogues[0].id}
-        />
-      </ReactFlowProvider>
+      match[3] ? (
+        <Characters project={project} />
+      ) : (
+        <ReactFlowProvider>
+          <Board
+            key={match[2] || project.dialogues[0].id}
+            project={project}
+            dialogueId={match[2] || project.dialogues[0].id}
+          />
+        </ReactFlowProvider>
+      )
     ) : (
       <main className="loading">
         <a className="brand" href="/">

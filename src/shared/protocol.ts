@@ -14,6 +14,7 @@ export const graphFragment = z.object({
         x: z.number().finite(),
         y: z.number().finite(),
         characterId: z.uuid().nullable(),
+        characterMissing: z.boolean().optional(),
         text: z.string().max(500_000),
       }),
     )

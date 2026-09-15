@@ -9,7 +9,7 @@ export async function readGraph(
   dialogueId: string,
 ): Promise<GraphSnapshot> {
   const nodes = await client.query(
-    'SELECT id, kind, x, y, preview, character_id AS "characterId" FROM nodes WHERE dialogue_id=$1 AND deleted_at IS NULL ORDER BY id',
+    'SELECT id, kind, x, y, preview, character_id AS "characterId", character_missing AS "characterMissing" FROM nodes WHERE dialogue_id=$1 AND deleted_at IS NULL ORDER BY id',
     [dialogueId],
   );
   const edges = await client.query(
@@ -59,7 +59,7 @@ export async function applyGraph(
         try {
           doc.getText('text').insert(0, n.text);
           await client.query(
-            'INSERT INTO nodes(id,dialogue_id,kind,x,y,character_id,preview,text_state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+            'INSERT INTO nodes(id,dialogue_id,kind,x,y,character_id,preview,text_state,character_missing) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
             [
               n.id,
               dialogueId,
@@ -69,6 +69,7 @@ export async function applyGraph(
               n.characterId,
               n.text.slice(0, 240),
               Buffer.from(Y.encodeStateAsUpdate(doc)),
+              n.characterMissing === true && !n.characterId,
             ],
           );
         } finally {
@@ -164,7 +165,7 @@ export async function applyGraph(
         );
         if (!character.rows.length) throw new AccessError('Персонаж недоступен в этом проекте.');
       }
-      await client.query('UPDATE nodes SET character_id=$2 WHERE id=$1', [
+      await client.query('UPDATE nodes SET character_id=$2,character_missing=false WHERE id=$1', [
         command.nodeId,
         command.characterId,
       ]);

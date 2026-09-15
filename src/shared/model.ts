@@ -7,6 +7,7 @@ export interface DialogueNode {
   y: number;
   preview: string;
   characterId: string | null;
+  characterMissing?: boolean;
 }
 
 export const characterColors = [

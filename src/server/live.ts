@@ -297,11 +297,16 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
     presence.clear();
   });
   return {
-    notifyProject: async (projectId: string) => {
+    notifyProject: async (projectId: string, graphChanged = false) => {
       const dialogues = await pool.query('SELECT id FROM dialogues WHERE project_id=$1', [
         projectId,
       ]);
-      for (const dialogue of dialogues.rows) broadcast(dialogue.id, { type: 'project-changed' });
+      for (const dialogue of dialogues.rows)
+        await enqueue(dialogue.id, async () => {
+          if (graphChanged)
+            broadcast(dialogue.id, { type: 'graph', ...(await readGraph(pool, dialogue.id)) });
+          broadcast(dialogue.id, { type: 'project-changed' });
+        });
     },
     createNode: (dialogueId: string, node: DialogueNode, actor: string, operationId?: string) =>
       enqueue(dialogueId, async () => {

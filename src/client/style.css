@@ -734,3 +734,43 @@ input[type='color'] {
   padding: 3px;
   cursor: pointer;
 }
+
+.characters-page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 40px 24px;
+}
+.characters-page header {
+  margin-bottom: 28px;
+}
+.character-card {
+  background: #fffefa;
+  border: 1px solid #d1d7cb;
+  border-radius: 12px;
+  padding: 22px;
+  margin: 16px 0;
+}
+.character-card form,
+.character-create {
+  display: flex;
+  align-items: end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.character-card .button-row {
+  margin-top: 14px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.character-create h2 {
+  flex-basis: 100%;
+  margin: 0;
+}
+.character-confirm {
+  border-top: 1px solid #d1d7cb;
+  margin-top: 18px;
+  padding-top: 12px;
+}
+.character-confirm button {
+  margin-right: 12px;
+}

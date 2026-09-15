@@ -1264,3 +1264,152 @@ test('a copied branch pastes atomically into another dialogue with independent t
     doc.destroy();
   }
 });
+
+test('character rename and deletion span dialogues and safely race assignment', async () => {
+  const project = (
+    await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Character catalogue' },
+    })
+  ).json();
+  const access = async (token: string) => {
+    const grant = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/access`,
+      payload: { token },
+    });
+    return grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  };
+  const owner = await access(project.ownerToken),
+    editor = await access(project.editorToken);
+  const post = (path: string, payload: Record<string, unknown> = {}, cookie = owner) =>
+    app.inject({ method: 'POST', url: path, headers: { cookie }, payload });
+  const read = async (id: string) =>
+    (await app.inject({ url: `/api/dialogues/${id}`, headers: { cookie: editor } })).json();
+  const second = (await post(`/api/projects/${project.id}/dialogues`, { name: 'Second' })).json();
+  const character = (
+    await post(`/api/projects/${project.id}/characters`, { name: 'Before' })
+  ).json();
+  const firstNode = (
+    await post(`/api/dialogues/${project.dialogueId}/nodes`, { kind: 'line', x: 300, y: 100 })
+  ).json();
+  const secondNode = (
+    await post(`/api/dialogues/${second.id}/nodes`, { kind: 'line', x: 300, y: 100 })
+  ).json();
+  currentDialogue = project.dialogueId;
+  const a = connect(owner);
+  currentDialogue = second.id;
+  const b = connect(editor);
+  const send = async (
+    peer: ReturnType<typeof connect>,
+    command: Record<string, unknown>,
+    outcome = 'saved',
+  ) => {
+    const operationId = crypto.randomUUID();
+    peer.send({ ...command, operationId });
+    expect((await peer.next(outcome)).operationId).toBe(operationId);
+    return operationId;
+  };
+  try {
+    await a.next('ready');
+    await b.next('ready');
+    const assignment = await send(a, {
+      type: 'set-character',
+      nodeId: firstNode.id,
+      characterId: character.id,
+    });
+    await send(b, { type: 'set-character', nodeId: secondNode.id, characterId: character.id });
+    a.send({ type: 'open-text', nodeId: firstNode.id });
+    await a.next('text-state');
+    const doc = new Y.Doc();
+    doc.getText('text').insert(0, 'Text stays');
+    await send(a, {
+      type: 'text-update',
+      nodeId: firstNode.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64'),
+    });
+    doc.destroy();
+    const unrelated = (
+      await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Unrelated' } })
+    ).json();
+    expect(
+      (
+        await post(`/api/projects/${unrelated.id}/characters/${character.id}/rename`, {
+          name: 'Wrong',
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (await post(`/api/projects/${unrelated.id}/characters/${character.id}/delete`)).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await post(
+          `/api/projects/${project.id}/characters/${character.id}/rename`,
+          { name: 'Renamed' },
+          editor,
+        )
+      ).statusCode,
+    ).toBe(200);
+    const catalogue = (
+      await app.inject({ url: `/api/projects/${project.id}`, headers: { cookie: editor } })
+    ).json();
+    expect(catalogue.characters).toContainEqual({ ...character, name: 'Renamed' });
+    const concurrent = crypto.randomUUID();
+    b.send({
+      type: 'set-character',
+      operationId: concurrent,
+      nodeId: secondNode.id,
+      characterId: character.id,
+    });
+    const deletion = await post(
+      `/api/projects/${project.id}/characters/${character.id}/delete`,
+      {},
+      editor,
+    );
+    expect(deletion.statusCode).toBe(200);
+    const receipt = await Promise.race([b.next('saved'), b.next('error')]);
+    expect(receipt.operationId).toBe(concurrent);
+    for (const [id, nodeId] of [
+      [project.dialogueId, firstNode.id],
+      [second.id, secondNode.id],
+    ]) {
+      expect((await read(id)).nodes.find((n: { id: string }) => n.id === nodeId)).toMatchObject({
+        characterId: null,
+        characterMissing: true,
+      });
+    }
+    expect(
+      (await read(project.dialogueId)).nodes.find((n: { id: string }) => n.id === firstNode.id)
+        .preview,
+    ).toBe('Text stays');
+    await send(a, { type: 'reverse-graph', targetOperationId: assignment }, 'error');
+    await send(
+      b,
+      { type: 'set-character', nodeId: secondNode.id, characterId: character.id },
+      'error',
+    );
+    expect(
+      (await post(`/api/projects/${project.id}/characters/${character.id}/delete`)).statusCode,
+    ).toBe(200);
+    const replacement = (
+      await post(`/api/projects/${project.id}/characters`, { name: 'Replacement' })
+    ).json();
+    const replace = await send(a, {
+      type: 'set-character',
+      nodeId: firstNode.id,
+      characterId: replacement.id,
+    });
+    expect(
+      (await read(project.dialogueId)).nodes.find((n: { id: string }) => n.id === firstNode.id),
+    ).toMatchObject({ characterId: replacement.id, characterMissing: false });
+    await send(a, { type: 'reverse-graph', targetOperationId: replace });
+    expect(
+      (await read(project.dialogueId)).nodes.find((n: { id: string }) => n.id === firstNode.id),
+    ).toMatchObject({ characterId: null, characterMissing: true, preview: 'Text stays' });
+  } finally {
+    a.socket.terminate();
+    b.socket.terminate();
+  }
+});

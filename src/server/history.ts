@@ -4,7 +4,9 @@ import type { GraphCommand } from '../shared/protocol';
 import { AccessError } from './access';
 import { applyGraph, readGraph } from './graph';
 
-type Value = DialogueNode | DialogueEdge | { x: number; y: number } | string | null;
+type CharacterValue = { characterId: string | null; characterMissing: boolean };
+type Value =
+  DialogueNode | DialogueEdge | { x: number; y: number } | CharacterValue | string | null;
 type Change = {
   field: string;
   kind: 'node' | 'edge' | 'position' | 'character';
@@ -111,8 +113,8 @@ export async function recordGraphAction<T>(
       add(
         'character',
         id,
-        a.characterId,
-        b.characterId,
+        { characterId: a.characterId, characterMissing: a.characterMissing ?? false },
+        { characterId: b.characterId, characterMissing: b.characterMissing ?? false },
         command?.type === 'set-character' && command.nodeId === id,
       );
     }
@@ -203,12 +205,19 @@ export async function reverseGraph(
         positions: [{ nodeId: change.id, ...p }],
       });
     } else if (change.kind === 'character') {
+      // Older history stored just the character UUID (or null).
+      const character =
+        desired !== null && typeof desired === 'object'
+          ? (desired as CharacterValue)
+          : { characterId: desired as string | null, characterMissing: false };
       await applyGraph(client, dialogueId, {
         type: 'set-character',
         operationId,
         nodeId: change.id,
-        characterId: desired as string | null,
+        characterId: character.characterId,
       });
+      if (character.characterMissing)
+        await client.query('UPDATE nodes SET character_missing=true WHERE id=$1', [change.id]);
     } else if (change.kind === 'node') {
       if (desired === null)
         await applyGraph(client, dialogueId, {

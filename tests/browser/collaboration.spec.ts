@@ -844,3 +844,79 @@ test('a branch copies between dialogues and undo removes the whole independent p
     await context.close();
   }
 });
+
+test('the character catalogue updates authors in different dialogues and preserves their text', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Shared characters');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const invitation = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const directoryPath = await page
+    .getByRole('link', { name: 'Персонажи', exact: true })
+    .getAttribute('href');
+  const directory = await page.context().newPage();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  const line = async (p: typeof page, text: string) => {
+    await p.locator('.react-flow__pane').click({ button: 'right', position: { x: 400, y: 280 } });
+    await p.getByRole('button', { name: 'Реплика', exact: true }).click();
+    await p.getByTestId('node-line').dblclick();
+    await p.getByRole('textbox', { name: 'Текст реплики' }).fill(text);
+    await p.getByLabel('Персонаж', { exact: true }).selectOption({ label: 'Проводник' });
+    await expect(p.getByTestId('save-status')).toHaveText('Сохранено');
+  };
+  try {
+    await directory.goto(directoryPath!);
+    await expect(directory.getByRole('heading', { name: 'Персонажи', exact: true })).toBeVisible();
+    await directory.getByLabel('Имя нового персонажа').fill('Проводник');
+    await directory.getByLabel('Цвет нового персонажа').fill('#123456');
+    await directory.getByRole('button', { name: 'Создать персонажа', exact: true }).click();
+    await expect(directory.getByRole('article', { name: 'Проводник' })).toBeVisible();
+    await other.goto(invitation);
+    await other.getByRole('link', { name: 'Первый диалог' }).click();
+    await line(other, 'Первый диалог');
+    await page.getByRole('button', { name: 'Новый диалог' }).click();
+    await page
+      .getByRole('dialog', { name: 'Новый диалог' })
+      .getByRole('textbox')
+      .fill('Второй диалог');
+    await page.getByRole('button', { name: 'Создать диалог', exact: true }).click();
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    await line(page, 'Второй диалог');
+    const row = directory.getByRole('article', { name: 'Проводник', exact: true });
+    await row.getByLabel('Имя персонажа', { exact: true }).fill('Наставник');
+    await row.getByRole('button', { name: 'Сохранить имя', exact: true }).click();
+    for (const p of [page, other])
+      await expect(p.getByTestId('node-line').locator('.node-character')).toHaveText('Наставник');
+    const renamed = directory.getByRole('article', { name: 'Наставник', exact: true });
+    await renamed.getByLabel('Цвет персонажа', { exact: true }).fill('#654321');
+    await renamed.getByRole('button', { name: 'Сохранить цвет', exact: true }).click();
+    for (const p of [page, other])
+      await expect(p.getByTestId('node-line')).toHaveCSS('--character-color', '#654321');
+    await renamed.getByRole('button', { name: 'Удалить персонажа', exact: true }).click();
+    await renamed.getByRole('button', { name: 'Подтвердить удаление', exact: true }).click();
+    await expect(directory.getByRole('article')).toHaveCount(0);
+    for (const p of [page, other]) {
+      await expect(p.getByTestId('node-line').locator('.node-character')).toHaveText(
+        'Неизвестный персонаж',
+      );
+      await expect(p.getByLabel('Персонаж', { exact: true })).toHaveValue('__missing');
+      await expect(p.getByRole('option', { name: 'Наставник', exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Второй диалог');
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Первый диалог');
+    await other.reload();
+    await expect(other.getByTestId('node-line').locator('.node-character')).toHaveText(
+      'Неизвестный персонаж',
+    );
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Первый диалог');
+    await directory.screenshot({ path: 'test-results/character-catalogue.png', fullPage: true });
+  } finally {
+    await directory.close();
+    await context.close();
+  }
+});
