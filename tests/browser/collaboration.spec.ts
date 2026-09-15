@@ -767,3 +767,80 @@ test('selected nodes delete together and undo together while start stays protect
     await context.close();
   }
 });
+
+test('a branch copies between dialogues and undo removes the whole independent paste', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Paste branch');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const invitation = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  for (const [x, kind] of [
+    [400, 'Реплика'],
+    [720, 'Вариант'],
+  ] as const) {
+    await page.locator('.react-flow__pane').click({ button: 'right', position: { x, y: 280 } });
+    await page.getByRole('button', { name: kind, exact: true }).click();
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  }
+  await page.getByTestId('node-line').dblclick();
+  await page.getByRole('textbox', { name: 'Текст реплики' }).fill('Исходник');
+  await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const from = await page.getByTestId('node-line').locator('[aria-label="Выход"]').boundingBox();
+  const to = await page.getByTestId('node-choice').locator('[aria-label="Вход"]').boundingBox();
+  if (!from || !to) throw Error('Missing handles');
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 20 });
+  await page.mouse.up();
+  await expect(page.locator('.story-edge')).toHaveCount(1);
+  await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  await page.getByTestId('node-line').click();
+  await page.getByTestId('node-choice').click({ modifiers: ['Shift'] });
+  await page.getByTestId('node-choice').click({ button: 'right' });
+  await page.getByRole('button', { name: 'Копировать ноды', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Копировать ноды', exact: true })).toHaveCount(0);
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await other.goto(invitation);
+    await other.getByTestId('node-line').dblclick();
+    await other.getByRole('textbox', { name: 'Текст реплики' }).fill('Изменён исходник');
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Изменён исходник');
+    await page.getByRole('button', { name: 'Новый диалог' }).click();
+    await page
+      .getByRole('dialog', { name: 'Новый диалог' })
+      .getByRole('textbox')
+      .fill('Копия ветки');
+    await page.getByRole('button', { name: 'Создать диалог', exact: true }).click();
+    await expect(page.getByTestId('node-line')).toHaveCount(0);
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    await page
+      .locator('.react-flow__pane')
+      .click({ button: 'right', position: { x: 380, y: 280 } });
+    await page.getByRole('button', { name: 'Вставить ноды', exact: true }).click();
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Исходник');
+    await expect(page.getByTestId('node-choice')).toHaveCount(1);
+    await expect(page.locator('.story-edge')).toHaveCount(1);
+    await expect(page.getByTestId('node-start')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Отменить', exact: true }).click();
+    await expect(page.getByTestId('node-line')).toHaveCount(0);
+    await expect(page.getByTestId('node-choice')).toHaveCount(0);
+    await expect(page.locator('.story-edge')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Повторить', exact: true }).click();
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Исходник');
+    await page.getByTestId('node-line').dblclick();
+    await page.getByRole('textbox', { name: 'Текст реплики' }).fill('Независимая копия');
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Изменён исходник');
+    await other.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    await other.getByRole('link', { name: 'Копия ветки' }).click();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Независимая копия');
+  } finally {
+    await context.close();
+  }
+});

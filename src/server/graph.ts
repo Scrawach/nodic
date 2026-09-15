@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import * as Y from 'yjs';
 import type { GraphCommand } from '../shared/protocol';
 import type { GraphSnapshot } from '../shared/model';
 import { AccessError } from './access';
@@ -31,6 +32,67 @@ export async function applyGraph(
     return found;
   };
   switch (command.type) {
+    case 'paste-nodes': {
+      const { nodes, edges, projectId } = command.fragment;
+      const dialogue = await client.query('SELECT project_id FROM dialogues WHERE id=$1', [
+        dialogueId,
+      ]);
+      if (dialogue.rows[0].project_id !== projectId)
+        throw new AccessError('Вставка доступна только внутри одного проекта.');
+      const ids = new Set(nodes.map((n) => n.id));
+      if (ids.size !== nodes.length || new Set(edges.map((e) => e.id)).size !== edges.length)
+        throw new AccessError('Идентификатор указан несколько раз.');
+      if (edges.some((e) => !ids.has(e.source) || !ids.has(e.target)))
+        throw new AccessError('Можно вставлять только внутренние связи группы.');
+      for (const n of nodes) {
+        if (n.kind !== 'line' && n.characterId)
+          throw new AccessError('Персонаж задаётся только у реплики.');
+        if (n.kind === 'end' && n.text) throw new AccessError('У конца не может быть текста.');
+        if (n.characterId) {
+          const character = await client.query(
+            'SELECT id FROM characters WHERE id=$1 AND project_id=$2 FOR KEY SHARE',
+            [n.characterId, projectId],
+          );
+          if (!character.rows.length) throw new AccessError('Персонаж недоступен в этом проекте.');
+        }
+        const doc = new Y.Doc();
+        try {
+          doc.getText('text').insert(0, n.text);
+          await client.query(
+            'INSERT INTO nodes(id,dialogue_id,kind,x,y,character_id,preview,text_state) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+            [
+              n.id,
+              dialogueId,
+              n.kind,
+              n.x,
+              n.y,
+              n.characterId,
+              n.text.slice(0, 240),
+              Buffer.from(Y.encodeStateAsUpdate(doc)),
+            ],
+          );
+        } finally {
+          doc.destroy();
+        }
+      }
+      for (const edge of edges) {
+        await applyGraph(client, dialogueId, {
+          type: 'connect-edge',
+          operationId: command.operationId,
+          edgeId: edge.id,
+          source: edge.source,
+          target: edge.target,
+        });
+        if (edge.bend)
+          await applyGraph(client, dialogueId, {
+            type: 'bend-edge',
+            operationId: command.operationId,
+            edgeId: edge.id,
+            bend: edge.bend,
+          });
+      }
+      break;
+    }
     case 'move-nodes':
       if (new Set(command.positions.map((p) => p.nodeId)).size !== command.positions.length)
         throw new AccessError('Нода указана несколько раз.');

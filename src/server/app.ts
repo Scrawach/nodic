@@ -3,7 +3,9 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { openDatabase } from './database';
+import { openDatabase, transaction } from './database';
+import * as Y from 'yjs';
+import { graphFragment } from '../shared/protocol';
 import { cookieName, createProject, grantAccess, requireDialogue, requireProject } from './access';
 import { registerLive } from './live';
 import { readGraph } from './graph';
@@ -77,6 +79,45 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
       [dialogueId],
     );
     return { ...result.rows[0], ...(await readGraph(pool, dialogueId)) };
+  });
+  app.post('/api/dialogues/:dialogueId/copy', async (request) => {
+    const { dialogueId } = z.object({ dialogueId: z.uuid() }).parse(request.params);
+    await requireDialogue(pool, request, dialogueId);
+    const { nodeIds } = z
+      .object({ nodeIds: z.array(z.uuid()).min(1).max(1000) })
+      .parse(request.body);
+    return transaction(pool, async (client) => {
+      const dialogue = await client.query(
+        'SELECT project_id FROM dialogues WHERE id=$1 FOR UPDATE',
+        [dialogueId],
+      );
+      const result = await client.query(
+        'SELECT id,kind,x,y,character_id AS "characterId",text_state FROM nodes WHERE dialogue_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY id FOR SHARE',
+        [dialogueId, nodeIds],
+      );
+      if (result.rows.length !== new Set(nodeIds).size)
+        throw new AccessError('Нода недоступна или удалена.');
+      const nodes = result.rows
+        .filter((n) => n.kind !== 'start')
+        .map((n) => {
+          const doc = new Y.Doc();
+          try {
+            if (n.text_state) Y.applyUpdate(doc, n.text_state);
+            const { text_state: _state, ...node } = n;
+            return { ...node, text: doc.getText('text').toString() };
+          } finally {
+            doc.destroy();
+          }
+        });
+      if (!nodes.length) throw new AccessError('Начало не копируется. Выделите другие ноды.');
+      const ids = new Set(nodes.map((n) => n.id));
+      const graph = await readGraph(client, dialogueId);
+      return graphFragment.parse({
+        projectId: dialogue.rows[0].project_id,
+        nodes,
+        edges: graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
+      });
+    });
   });
   app.post('/api/dialogues/:dialogueId/nodes', async (request, reply) => {
     const { dialogueId } = z.object({ dialogueId: z.uuid() }).parse(request.params);

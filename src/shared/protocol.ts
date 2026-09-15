@@ -4,7 +4,36 @@ const encoded = z
   .string()
   .max(1_500_000)
   .regex(/^[A-Za-z0-9+/]*={0,2}$/);
+export const graphFragment = z.object({
+  projectId: z.uuid(),
+  nodes: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        kind: z.enum(['line', 'choice', 'end']),
+        x: z.number().finite(),
+        y: z.number().finite(),
+        characterId: z.uuid().nullable(),
+        text: z.string().max(500_000),
+      }),
+    )
+    .min(1)
+    .max(1000),
+  edges: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        source: z.uuid(),
+        target: z.uuid(),
+        bend: z.object({ x: z.number().finite(), y: z.number().finite() }).nullable(),
+      }),
+    )
+    .max(5000),
+});
+export type GraphFragment = z.infer<typeof graphFragment>;
+
 export const graphCommand = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('paste-nodes'), operationId: z.uuid(), fragment: graphFragment }),
   z.object({
     type: z.literal('reverse-graph'),
     operationId: z.uuid(),

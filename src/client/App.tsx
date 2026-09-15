@@ -14,6 +14,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { api } from './api';
+import { storeFragment, pastedFragment } from './clipboard';
+import type { GraphFragment } from '../shared/protocol';
 import { DialogueSession } from './session';
 import { TextEditor } from './TextEditor';
 import { StoryEdge } from './StoryEdge';
@@ -175,19 +177,53 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
       : menu?.nodeId
         ? [menu.nodeId]
         : [];
+  const copyNodes = async (nodeIds: string[]) => {
+    if (!nodeIds.length || !session.canMove() || state.status !== 'Сохранено') return;
+    try {
+      storeFragment(await api<GraphFragment>(`/dialogues/${dialogueId}/copy`, { nodeIds }));
+      setMenu(undefined);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const pasteNodes = (point?: { x: number; y: number }) => {
+    if (!session.canMove()) return;
+    try {
+      const fragment = pastedFragment(
+        project.id,
+        flow.screenToFlowPosition(point || { x: innerWidth / 2, y: innerHeight / 2 }),
+      );
+      session.command({ type: 'paste-nodes', operationId: crypto.randomUUID(), fragment });
+      setMenu(undefined);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   const links = recents().find((p) => p.id === project.id);
   return (
     <div
       className="workspace"
       onKeyDown={(event) => {
-        if (event.key !== 'Delete' && event.key !== 'Backspace') return;
-        if (editor || sharing) return;
+        if (editor || sharing || newDialogue) return;
         const target = event.target;
         if (
           target instanceof HTMLElement &&
-          (target.closest('input, textarea, select, button') || target.isContentEditable)
+          (target.closest('input, textarea, select') || target.isContentEditable)
         )
           return;
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+          if (event.code === 'KeyC' && selectedIds.length) {
+            event.preventDefault();
+            void copyNodes(selectedIds);
+          }
+          if (event.code === 'KeyV') {
+            event.preventDefault();
+            pasteNodes();
+          }
+          return;
+        }
+        if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+        if (target instanceof HTMLElement && target.closest('button')) return;
         if (!selectedIds.length) return;
         event.preventDefault();
         deleteNodes(selectedIds);
@@ -353,19 +389,31 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             }}
           >
             {menu.nodeId ? (
-              <button
-                disabled={
-                  !session.canMove() ||
-                  state.nodes.find((n) => n.id === menu.nodeId)?.kind === 'start'
-                }
-                onClick={() => {
-                  deleteNodes(menuNodeIds);
-                }}
-              >
-                {menuNodeIds.length > 1
-                  ? `⌫ Удалить выделенные (${menuNodeIds.length})`
-                  : '⌫ Удалить ноду'}
-              </button>
+              <>
+                <button
+                  disabled={
+                    !session.canMove() ||
+                    state.status !== 'Сохранено' ||
+                    state.nodes.find((n) => n.id === menu.nodeId)?.kind === 'start'
+                  }
+                  onClick={() => void copyNodes(menuNodeIds)}
+                >
+                  Копировать ноды
+                </button>
+                <button
+                  disabled={
+                    !session.canMove() ||
+                    state.nodes.find((n) => n.id === menu.nodeId)?.kind === 'start'
+                  }
+                  onClick={() => {
+                    deleteNodes(menuNodeIds);
+                  }}
+                >
+                  {menuNodeIds.length > 1
+                    ? `⌫ Удалить выделенные (${menuNodeIds.length})`
+                    : '⌫ Удалить ноду'}
+                </button>
+              </>
             ) : menu.edgeId ? (
               <>
                 <button
@@ -397,11 +445,20 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
                 </button>
               </>
             ) : (
-              (['line', 'choice', 'end'] as const).map((kind) => (
-                <button key={kind} disabled={!state.connected} onClick={() => void add(kind, menu)}>
-                  <span aria-hidden="true">{icons[kind]}</span> {names[kind]}
+              <>
+                <button disabled={!session.canMove()} onClick={() => pasteNodes(menu)}>
+                  Вставить ноды
                 </button>
-              ))
+                {(['line', 'choice', 'end'] as const).map((kind) => (
+                  <button
+                    key={kind}
+                    disabled={!state.connected}
+                    onClick={() => void add(kind, menu)}
+                  >
+                    <span aria-hidden="true">{icons[kind]}</span> {names[kind]}
+                  </button>
+                ))}
+              </>
             )}
           </div>
         )}

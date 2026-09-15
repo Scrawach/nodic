@@ -1112,3 +1112,155 @@ test('group deletion is atomic, protects start, and restores its nodes and edges
     peer.socket.terminate();
   }
 });
+
+test('a copied branch pastes atomically into another dialogue with independent text and one undo', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Copy branch' } })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.ownerToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  const post = async (url: string, payload: Record<string, unknown>) =>
+    (await app.inject({ method: 'POST', url, headers: { cookie }, payload })).json();
+  const read = async (id: string) =>
+    (await app.inject({ url: `/api/dialogues/${id}`, headers: { cookie } })).json();
+  const sourceId = project.dialogueId;
+  const start = (await read(sourceId)).nodes[0];
+  const line = await post(`/api/dialogues/${sourceId}/nodes`, { kind: 'line', x: 300, y: 100 });
+  const choice = await post(`/api/dialogues/${sourceId}/nodes`, { kind: 'choice', x: 600, y: 100 });
+  const character = await post(`/api/projects/${project.id}/characters`, { name: 'Guide' });
+  currentDialogue = sourceId;
+  const source = connect(cookie);
+  const destination = await post(`/api/projects/${project.id}/dialogues`, { name: 'Destination' });
+  currentDialogue = destination.id;
+  const target = connect(cookie);
+  const send = async (
+    peer: ReturnType<typeof connect>,
+    command: Record<string, unknown>,
+    outcome = 'saved',
+  ) => {
+    const operationId = crypto.randomUUID();
+    peer.send({ ...command, operationId });
+    const receipt = await peer.next(outcome);
+    expect(receipt.operationId).toBe(operationId);
+    return operationId;
+  };
+  const doc = new Y.Doc();
+  try {
+    await source.next('ready');
+    await target.next('ready');
+    await send(source, { type: 'set-character', nodeId: line.id, characterId: character.id });
+    const edgeId = crypto.randomUUID();
+    await send(source, {
+      type: 'connect-edge',
+      edgeId: crypto.randomUUID(),
+      source: start.id,
+      target: line.id,
+    });
+    await send(source, { type: 'connect-edge', edgeId, source: line.id, target: choice.id });
+    await send(source, { type: 'bend-edge', edgeId, bend: { x: 440, y: 40 } });
+    source.send({ type: 'open-text', nodeId: line.id });
+    await source.next('text-state');
+    const text = 'Полный текст '.repeat(30);
+    doc.getText('text').insert(0, text);
+    await send(source, {
+      type: 'text-update',
+      nodeId: line.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64'),
+    });
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/api/dialogues/${sourceId}/copy`,
+      payload: { nodeIds: [line.id] },
+    });
+    expect(denied.statusCode).toBe(403);
+    const fragment = await post(`/api/dialogues/${sourceId}/copy`, {
+      nodeIds: [start.id, line.id, choice.id],
+    });
+    expect(fragment.nodes).toHaveLength(2);
+    expect(fragment.edges).toHaveLength(1);
+    expect(fragment.nodes.find((n: { id: string }) => n.id === line.id).text).toBe(text);
+    const ids = new Map<string, string>(
+      fragment.nodes.map((n: { id: string }) => [n.id, crypto.randomUUID()]),
+    );
+    const pasted = {
+      ...fragment,
+      nodes: fragment.nodes.map((n: { id: string }) => ({ ...n, id: ids.get(n.id) })),
+      edges: fragment.edges.map((e: { source: string; target: string }) => ({
+        ...e,
+        id: crypto.randomUUID(),
+        source: ids.get(e.source),
+        target: ids.get(e.target),
+      })),
+    };
+    const initial = await read(destination.id);
+    await send(
+      target,
+      { type: 'paste-nodes', fragment: { ...pasted, projectId: crypto.randomUUID() } },
+      'error',
+    );
+    expect(await read(destination.id)).toEqual(initial);
+    // Invalid branching is discovered after node insertion: transaction rolls it all back.
+    await send(
+      target,
+      {
+        type: 'paste-nodes',
+        fragment: {
+          ...pasted,
+          edges: [...pasted.edges, { ...pasted.edges[0], id: crypto.randomUUID() }],
+        },
+      },
+      'error',
+    );
+    expect(await read(destination.id)).toEqual(initial);
+    const paste = await send(target, { type: 'paste-nodes', fragment: pasted });
+    const result = await read(destination.id);
+    expect(result.nodes).toHaveLength(3);
+    expect(result.edges).toHaveLength(1);
+    expect(result.edges[0].bend).toEqual({ x: 440, y: 40 });
+    expect(result.nodes.find((n: { id: string }) => n.id === ids.get(line.id)).characterId).toBe(
+      character.id,
+    );
+    target.send({ type: 'paste-nodes', operationId: paste, fragment: pasted });
+    await target.next('saved');
+    expect(await read(destination.id)).toEqual(result);
+    doc.getText('text').insert(0, 'Изменён исходник. ');
+    await send(source, {
+      type: 'text-update',
+      nodeId: line.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64'),
+    });
+    target.send({ type: 'open-text', nodeId: ids.get(line.id) });
+    const state = await target.next('text-state');
+    const copy = new Y.Doc();
+    Y.applyUpdate(copy, Buffer.from(String(state.data), 'base64'));
+    expect(copy.getText('text').toString()).toBe(text);
+    copy.getText('text').insert(0, 'Копия. ');
+    await send(target, {
+      type: 'text-update',
+      nodeId: ids.get(line.id),
+      data: Buffer.from(Y.encodeStateAsUpdate(copy)).toString('base64'),
+    });
+    copy.destroy();
+    expect((await read(sourceId)).nodes.find((n: { id: string }) => n.id === line.id).preview).toBe(
+      ('Изменён исходник. ' + text).slice(0, 240),
+    );
+    const undo = await send(target, { type: 'reverse-graph', targetOperationId: paste });
+    expect(await read(destination.id)).toEqual(initial);
+    target.send({ type: 'paste-nodes', operationId: paste, fragment: pasted });
+    await target.next('saved');
+    expect(await read(destination.id)).toEqual(initial);
+    await send(target, { type: 'reverse-graph', targetOperationId: undo });
+    expect(
+      (await read(destination.id)).nodes.find((n: { id: string }) => n.id === ids.get(line.id))
+        .preview,
+    ).toBe(('Копия. ' + text).slice(0, 240));
+  } finally {
+    source.socket.terminate();
+    target.socket.terminate();
+    doc.destroy();
+  }
+});
