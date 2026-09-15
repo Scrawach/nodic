@@ -272,7 +272,9 @@ export async function reverseGraph(
     });
   }
   for (const change of applied)
-    if (change.kind === 'node' && change.after) change.guards = nodeGuards(change.id, stamps);
+    // A restored node starts a new protection window. Existing text must survive
+    // another deletion/restoration cycle; only later foreign edits block deletion.
+    if (change.kind === 'node' && change.after) await protectNode(client, change, stamps);
   const notice = skipped
     ? 'Восстановление выполнено; часть связей пропущена: их концы удалены или изменились правила ветвления.'
     : '';

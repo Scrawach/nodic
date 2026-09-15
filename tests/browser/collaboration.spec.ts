@@ -456,6 +456,85 @@ test('creation and deletion undo restore the same node and its shared text', asy
     await expect(other.getByTestId('node-line').locator('p')).toHaveText('Текст коллеги');
     await other.getByTestId('node-line').dblclick();
     await expect(other.getByRole('textbox', { name: 'Текст реплики' })).toHaveText('Текст коллеги');
+    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await expect(other.getByTestId('node-line')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Текст коллеги');
+    await other.getByTestId('node-line').dblclick();
+    await other.getByRole('textbox', { name: 'Текст реплики' }).fill('Новая правка коллеги');
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Новая правка коллеги');
+    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('текст другого автора');
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Новая правка коллеги');
+  } finally {
+    await context.close();
+  }
+});
+
+test('lost Undo and Redo receipts replay after reconnect without losing history', async ({
+  page,
+  browser,
+}) => {
+  const attempts = new Map<string, number>();
+  const dropped = new Set<string>();
+  await page.routeWebSocket('**/live', (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.type === 'reverse-graph') {
+        attempts.set(message.operationId, (attempts.get(message.operationId) || 0) + 1);
+      }
+      server.send(raw);
+    });
+    server.onMessage((raw) => {
+      const message = JSON.parse(raw.toString());
+      if (
+        message.type === 'saved' &&
+        attempts.has(message.operationId) &&
+        !dropped.has(message.operationId)
+      ) {
+        dropped.add(message.operationId);
+        socket.close();
+        server.close();
+        return;
+      }
+      socket.send(raw);
+    });
+  });
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Reversal reconnect');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const link = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await other.goto(link);
+    await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
+    await page
+      .locator('.react-flow__pane')
+      .click({ button: 'right', position: { x: 400, y: 220 } });
+    await page.getByRole('button', { name: 'Реплика', exact: true }).click();
+    await expect(other.getByTestId('node-line')).toHaveCount(1);
+    for (const [button, count] of [
+      ['Отменить структуру', 0],
+      ['Повторить структуру', 1],
+      ['Отменить структуру', 0],
+    ] as const) {
+      await page.getByRole('button', { name: button, exact: true }).click();
+      await expect(other.getByTestId('node-line')).toHaveCount(count);
+      await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+      await expect(page.getByTestId('node-line')).toHaveCount(count);
+    }
+    expect(dropped.size).toBe(3);
+    expect([...attempts.values()]).toEqual([2, 2, 2]);
+    await expect(
+      page.getByRole('button', { name: 'Повторить структуру', exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole('button', { name: 'Отменить структуру', exact: true }),
+    ).toBeDisabled();
   } finally {
     await context.close();
   }

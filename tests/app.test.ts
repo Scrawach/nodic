@@ -819,6 +819,12 @@ test('undo deletion retains late text and restores only valid edges', async () =
     payload: { token: project.ownerToken },
   });
   const cookie = grant.cookies.map((c) => c.name + '=' + c.value).join('; ');
+  const editorGrant = await app.inject({
+    method: 'POST',
+    url: '/api/projects/' + project.id + '/access',
+    payload: { token: project.editorToken },
+  });
+  const editorCookie = editorGrant.cookies.map((c) => c.name + '=' + c.value).join('; ');
   const create = async () =>
     (
       await app.inject({
@@ -832,6 +838,7 @@ test('undo deletion retains late text and restores only valid edges', async () =
     target = await create();
   currentDialogue = project.dialogueId;
   const peer = connect(cookie);
+  const editor = connect(editorCookie);
   const send = async (command: Record<string, unknown>) => {
     const operationId = crypto.randomUUID();
     peer.send({ ...command, operationId });
@@ -841,6 +848,7 @@ test('undo deletion retains late text and restores only valid edges', async () =
     (await app.inject({ url: '/api/dialogues/' + project.dialogueId, headers: { cookie } })).json();
   try {
     await peer.next('ready');
+    await editor.next('ready');
     const edgeId = crypto.randomUUID();
     await send({ type: 'connect-edge', edgeId, source: first.id, target: target.id });
     const bend = await send({ type: 'bend-edge', edgeId, bend: { x: 12, y: 34 } });
@@ -849,11 +857,13 @@ test('undo deletion retains late text and restores only valid edges', async () =
     const removed = await send({ type: 'delete-node', nodeId: first.id });
     const doc = new Y.Doc();
     doc.getText('text').insert(0, 'Late text survives');
-    await send({
+    editor.send({
       type: 'text-update',
+      operationId: crypto.randomUUID(),
       nodeId: first.id,
       data: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64'),
     });
+    await editor.next('saved');
     doc.destroy();
     const intact = await send({ type: 'reverse-graph', targetOperationId: removed.operationId });
     expect((await read()).edges.map((edge: { id: string }) => edge.id)).toContain(edgeId);
@@ -879,6 +889,7 @@ test('undo deletion retains late text and restores only valid edges', async () =
     );
   } finally {
     peer.socket.close();
+    editor.socket.close();
   }
 });
 
@@ -954,5 +965,82 @@ test('undo assignment preserves other fields and edge restoration rechecks branc
     expect((await read()).edges.map((e: { target: string }) => e.target)).toEqual([choice.id]);
   } finally {
     peer.socket.close();
+  }
+});
+
+test('structural history and reversal receipts survive a server restart', async () => {
+  const project = (
+    await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Persistent history' },
+    })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.ownerToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  currentDialogue = project.dialogueId;
+  const read = async () =>
+    (
+      await app.inject({
+        url: `/api/dialogues/${currentDialogue}`,
+        headers: { cookie },
+      })
+    ).json();
+  const start = (await read()).nodes[0];
+  let peer = connect(cookie);
+  const send = async (command: Record<string, unknown>) => {
+    peer.send(command);
+    const receipt = await peer.next('saved');
+    expect(receipt.operationId).toBe(command.operationId);
+  };
+  const restart = async () => {
+    peer.socket.terminate();
+    await app.close();
+    app = await createApp();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    peer = connect(cookie);
+    await peer.next('ready');
+  };
+  const moveId = crypto.randomUUID();
+  const undo = {
+    type: 'reverse-graph',
+    operationId: crypto.randomUUID(),
+    targetOperationId: moveId,
+  };
+  const redo = {
+    type: 'reverse-graph',
+    operationId: crypto.randomUUID(),
+    targetOperationId: undo.operationId,
+  };
+  try {
+    await peer.next('ready');
+    await send({
+      type: 'move-nodes',
+      operationId: moveId,
+      positions: [{ nodeId: start.id, x: 321, y: 654 }],
+    });
+    await restart();
+    await send(undo);
+    expect((await read()).nodes[0]).toMatchObject({ x: start.x, y: start.y });
+    await restart();
+    await send(undo);
+    await send(redo);
+    expect((await read()).nodes[0]).toMatchObject({ x: 321, y: 654 });
+    await restart();
+    await send(undo);
+    await send(redo);
+    expect((await read()).nodes[0]).toMatchObject({ x: 321, y: 654 });
+    await send({
+      type: 'reverse-graph',
+      operationId: crypto.randomUUID(),
+      targetOperationId: redo.operationId,
+    });
+    expect((await read()).nodes[0]).toMatchObject({ x: start.x, y: start.y });
+  } finally {
+    peer.socket.terminate();
   }
 });
