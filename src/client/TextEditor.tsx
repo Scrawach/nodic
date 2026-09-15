@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
-import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+import { yCollab } from 'y-codemirror.next';
 import type { DialogueSession } from './session';
 import { characterColors, type Project, type Character } from '../shared/model';
 import { api } from './api';
@@ -65,7 +65,7 @@ export function TextEditor({
             'aria-multiline': 'true',
           }),
           yCollab(handle.doc.getText('text'), handle.awareness, { undoManager: handle.undo }),
-          keymap.of([...yUndoManagerKeymap, ...defaultKeymap]),
+          keymap.of(defaultKeymap),
           EditorView.lineWrapping,
           EditorView.theme({
             '&': { minHeight: '240px', fontSize: '18px' },
@@ -243,11 +243,11 @@ export function TextEditor({
         <div ref={host} className="text-editor" />
         <footer className="editor-footer">
           <div className="button-row">
-            <button disabled={!enabled} onClick={() => handle.undo.undo()}>
-              Отменить ввод
+            <button disabled={!session.canUndo()} onClick={() => session.undo()}>
+              Отменить
             </button>
-            <button disabled={!enabled} onClick={() => handle.undo.redo()}>
-              Повторить ввод
+            <button disabled={!session.canRedo()} onClick={() => session.redo()}>
+              Повторить
             </button>
           </div>
           <span>

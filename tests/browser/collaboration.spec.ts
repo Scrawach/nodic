@@ -35,7 +35,7 @@ test('two browser sessions edit one reply and undo only their own text', async (
     await expect(other.getByTestId('node-line').locator('p')).toHaveText(
       'Привет, путник. Я Борис. Я Аня.',
     );
-    await page.getByRole('button', { name: 'Отменить ввод' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Отменить', exact: true }).click();
     await expect(other.getByTestId('node-line').locator('p')).toHaveText(
       'Привет, путник. Я Борис.',
     );
@@ -403,18 +403,16 @@ test('structural undo and redo are shared and preserve a later colleague move', 
     await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
     const initial = await transform(page);
     await move(page, 90);
-    await expect(
-      page.getByRole('button', { name: 'Отменить структуру', exact: true }),
-    ).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Отменить', exact: true }).first()).toBeEnabled();
     const moved = await transform(page);
-    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Отменить', exact: true }).first().click();
     await expect.poll(() => transform(other)).toBe(initial);
-    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Повторить', exact: true }).first().click();
     await expect.poll(() => transform(other)).toBe(moved);
     await move(other, 70);
     const foreign = await transform(other);
     await expect.poll(() => transform(page)).toBe(foreign);
-    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Отменить', exact: true }).first().click();
     await expect(page.getByRole('alert')).toContainText('Отмена пропущена');
     await expect.poll(() => transform(page)).toBe(foreign);
   } finally {
@@ -442,9 +440,9 @@ test('creation and deletion undo restore the same node and its shared text', asy
       .click({ button: 'right', position: { x: 400, y: 220 } });
     await page.getByRole('button', { name: 'Реплика', exact: true }).click();
     await expect(other.getByTestId('node-line')).toHaveCount(1);
-    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Отменить', exact: true }).first().click();
     await expect(other.getByTestId('node-line')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Повторить', exact: true }).first().click();
     await expect(other.getByTestId('node-line')).toHaveCount(1);
     await other.getByTestId('node-line').dblclick();
     await other.getByRole('textbox', { name: 'Текст реплики' }).fill('Текст коллеги');
@@ -452,18 +450,18 @@ test('creation and deletion undo restore the same node and its shared text', asy
     await page.getByTestId('node-line').click({ button: 'right' });
     await page.getByRole('button', { name: 'Удалить ноду' }).click();
     await expect(other.getByRole('textbox', { name: 'Текст реплики' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Отменить', exact: true }).first().click();
     await expect(other.getByTestId('node-line').locator('p')).toHaveText('Текст коллеги');
     await other.getByTestId('node-line').dblclick();
     await expect(other.getByRole('textbox', { name: 'Текст реплики' })).toHaveText('Текст коллеги');
-    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Повторить', exact: true }).first().click();
     await expect(other.getByTestId('node-line')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Отменить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Отменить', exact: true }).first().click();
     await expect(other.getByTestId('node-line').locator('p')).toHaveText('Текст коллеги');
     await other.getByTestId('node-line').dblclick();
     await other.getByRole('textbox', { name: 'Текст реплики' }).fill('Новая правка коллеги');
     await expect(page.getByTestId('node-line').locator('p')).toHaveText('Новая правка коллеги');
-    await page.getByRole('button', { name: 'Повторить структуру', exact: true }).click();
+    await page.getByRole('button', { name: 'Повторить', exact: true }).first().click();
     await expect(page.getByRole('alert')).toContainText('текст другого автора');
     await expect(other.getByTestId('node-line').locator('p')).toHaveText('Новая правка коллеги');
   } finally {
@@ -518,9 +516,9 @@ test('lost Undo and Redo receipts replay after reconnect without losing history'
     await page.getByRole('button', { name: 'Реплика', exact: true }).click();
     await expect(other.getByTestId('node-line')).toHaveCount(1);
     for (const [button, count] of [
-      ['Отменить структуру', 0],
-      ['Повторить структуру', 1],
-      ['Отменить структуру', 0],
+      ['Отменить', 0],
+      ['Повторить', 1],
+      ['Отменить', 0],
     ] as const) {
       await page.getByRole('button', { name: button, exact: true }).click();
       await expect(other.getByTestId('node-line')).toHaveCount(count);
@@ -530,12 +528,194 @@ test('lost Undo and Redo receipts replay after reconnect without losing history'
     expect(dropped.size).toBe(3);
     expect([...attempts.values()]).toEqual([2, 2, 2]);
     await expect(
-      page.getByRole('button', { name: 'Повторить структуру', exact: true }),
+      page.getByRole('button', { name: 'Повторить', exact: true }).first(),
     ).toBeEnabled();
     await expect(
-      page.getByRole('button', { name: 'Отменить структуру', exact: true }),
+      page.getByRole('button', { name: 'Отменить', exact: true }).first(),
     ).toBeDisabled();
   } finally {
     await context.close();
+  }
+});
+
+test('one history follows text, movement and another editor despite focus and foreign text', async ({
+  page,
+  browser,
+}) => {
+  let movementId: string | undefined;
+  let releaseMovement: (() => void) | undefined;
+  await page.routeWebSocket('**/live', (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.type === 'move-nodes' && !movementId) movementId = message.operationId;
+      server.send(raw);
+    });
+    server.onMessage((raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.type === 'saved' && message.operationId === movementId && !releaseMovement) {
+        releaseMovement = () => socket.send(raw);
+        return;
+      }
+      socket.send(raw);
+    });
+  });
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Unified history');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const link = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  for (const [x, kind] of [
+    [400, 'Реплика'],
+    [720, 'Вариант'],
+  ] as const) {
+    await page.locator('.react-flow__pane').click({ button: 'right', position: { x, y: 280 } });
+    await page.getByRole('button', { name: kind, exact: true }).click();
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  }
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  const position = (p: typeof page) =>
+    p
+      .getByTestId('node-line')
+      .locator('..')
+      .evaluate((el) => (el as HTMLElement).style.transform);
+  const editor = page.getByRole('textbox', { name: 'Текст реплики' });
+  const saved = () => expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  try {
+    await other.goto(link);
+    await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
+    await page.getByTestId('node-line').dblclick();
+    await editor.fill('Первый');
+    await saved();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    const initial = await position(page);
+    const box = await page.getByTestId('node-line').boundingBox();
+    if (!box) throw Error('Missing start');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 40, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(() => position(page)).not.toBe(initial);
+    const moved = await position(page);
+    await page.getByTestId('node-choice').dblclick();
+    await editor.fill('Второй');
+    await expect(page.getByTestId('save-status')).toHaveText('Сохраняется…');
+    await expect.poll(() => Boolean(releaseMovement)).toBe(true);
+    releaseMovement!();
+    await saved();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await other.getByTestId('node-line').dblclick();
+    const foreign = other.getByRole('textbox', { name: 'Текст реплики' });
+    await foreign.press('End');
+    await foreign.pressSequentially(' коллега');
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Первый коллега');
+    // Focus the first editor: Undo must still start with the second editor's text.
+    await page.getByTestId('node-line').dblclick();
+    await editor.press('Control+z');
+    await saved();
+    await expect(other.getByTestId('node-choice').locator('p')).toHaveText('');
+    await editor.press('Control+z');
+    await saved();
+    await expect.poll(() => position(other)).toBe(initial);
+    await editor.press('Control+z');
+    await saved();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('коллега');
+    await editor.press('Control+Shift+z');
+    await saved();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Первый коллега');
+    await editor.press('Control+y');
+    await saved();
+    await expect.poll(() => position(other)).toBe(moved);
+    await editor.press('Control+Shift+z');
+    await saved();
+    await expect(other.getByTestId('node-choice').locator('p')).toHaveText('Второй');
+    // A new local action clears Redo across editors. A foreign deletion then
+    // makes that action empty, but must not make Undo reach the older first text.
+    await editor.press('Control+z');
+    await saved();
+    await editor.press('End');
+    await editor.pressSequentially(' лишнее');
+    await saved();
+    await expect(
+      page.getByRole('dialog').getByRole('button', { name: 'Повторить', exact: true }),
+    ).toBeDisabled();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Первый коллега лишнее');
+    await foreign.press('End');
+    for (let i = 0; i < ' лишнее'.length; i++) await foreign.press('Shift+ArrowLeft');
+    await foreign.press('Backspace');
+    await expect(page.getByTestId('node-line').locator('p')).toHaveText('Первый коллега');
+    await editor.press('Control+z');
+    await saved();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('Первый коллега');
+    await expect.poll(() => position(other)).toBe(moved);
+    // A colleague's later movement conflicts with the next structural Undo.
+    await other.keyboard.press('Escape');
+    await expect(other.getByRole('dialog')).toHaveCount(0);
+    const otherBox = await other.getByTestId('node-line').boundingBox();
+    if (!otherBox) throw Error('Missing line');
+    await other.mouse.move(otherBox.x + otherBox.width / 2, otherBox.y + otherBox.height / 2);
+    await other.mouse.down();
+    await other.mouse.move(
+      otherBox.x + otherBox.width / 2 + 60,
+      otherBox.y + otherBox.height / 2 + 30,
+      { steps: 10 },
+    );
+    await other.mouse.up();
+    await expect.poll(() => position(other)).not.toBe(moved);
+    const foreignPosition = await position(other);
+    await expect.poll(() => position(page)).toBe(foreignPosition);
+    await editor.press('Control+z');
+    await expect(page.getByRole('alert')).toContainText('Отмена пропущена');
+    await expect.poll(() => position(page)).toBe(foreignPosition);
+    await editor.press('Control+z');
+    await saved();
+    await expect(other.getByTestId('node-line').locator('p')).toHaveText('коллега');
+  } finally {
+    await context.close();
+  }
+});
+
+test('a delayed creation receipt keeps creation before later text in history', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Delayed creation history');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/dialogues/*/nodes', async (route) => {
+    const response = await route.fetch();
+    await gate;
+    await route.fulfill({ response });
+  });
+  try {
+    await page
+      .locator('.react-flow__pane')
+      .click({ button: 'right', position: { x: 400, y: 280 } });
+    await page.getByRole('button', { name: 'Реплика', exact: true }).click();
+    await expect(page.getByTestId('node-line')).toHaveCount(1);
+    await page.getByTestId('node-line').dblclick();
+    const editor = page.getByRole('textbox', { name: 'Текст реплики' });
+    await editor.fill('После создания');
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    await expect(
+      page.getByRole('dialog').getByRole('button', { name: 'Отменить', exact: true }),
+    ).toBeDisabled();
+    release();
+    await expect(
+      page.getByRole('dialog').getByRole('button', { name: 'Отменить', exact: true }),
+    ).toBeEnabled();
+    await editor.press('Control+z');
+    await expect(editor).toHaveText('');
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    await editor.press('Control+z');
+    await expect(page.getByTestId('node-line')).toHaveCount(0);
+  } finally {
+    release();
   }
 });

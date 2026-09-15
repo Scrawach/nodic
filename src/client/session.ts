@@ -15,6 +15,10 @@ export interface TextHandle {
   awareness: Awareness;
   loaded: boolean;
 }
+type HistoryEntry =
+  | { type: 'graph'; operationId: string }
+  | { type: 'text'; nodeId: string; item: Y.UndoManager['undoStack'][number] };
+
 interface SessionState {
   connected: boolean;
   status: string;
@@ -38,33 +42,92 @@ export class DialogueSession {
   private failed = false;
   private moveOrder = Date.now();
   private sentMove?: string;
-  private undoStack: string[] = [];
-  private redoStack: string[] = [];
-  private reversals = new Map<string, { direction: 'undo' | 'redo'; target: string }>();
-  rememberCreation(operationId: string) {
-    if (this.stopped) return;
-    this.undoStack.push(operationId);
+  private undoStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
+  private reversingText = false;
+  private creations = new Map<string, HistoryEntry>();
+  private reversals = new Map<string, { direction: 'undo' | 'redo'; target: HistoryEntry }>();
+  private stopCapturing() {
+    for (const handle of this.texts.values()) handle.undo.stopCapturing();
+  }
+  private remember(entry: HistoryEntry) {
+    this.undoStack.push(entry);
     this.redoStack = [];
+    for (const handle of this.texts.values()) handle.undo.clear(false, true);
     this.update();
   }
-  canUndoGraph() {
-    return this.canMove() && !this.pending.size && this.undoStack.length > 0;
+  beginCreation() {
+    const id = crypto.randomUUID();
+    const entry: HistoryEntry = { type: 'graph', operationId: id };
+    this.creations.set(id, entry);
+    this.stopCapturing();
+    this.remember(entry);
+    return id;
   }
-  canRedoGraph() {
-    return this.canMove() && !this.pending.size && this.redoStack.length > 0;
+  finishCreation(id: string, operationId?: string) {
+    const entry = this.creations.get(id);
+    this.creations.delete(id);
+    if (entry?.type === 'graph' && operationId) entry.operationId = operationId;
+    else this.undoStack = this.undoStack.filter((item) => item !== entry);
+    if (!this.stopped) this.update();
   }
-  undoGraph() {
+  canUndo() {
+    return (
+      this.canMove() && !this.pending.size && !this.creations.size && this.undoStack.length > 0
+    );
+  }
+  canRedo() {
+    return (
+      this.canMove() && !this.pending.size && !this.creations.size && this.redoStack.length > 0
+    );
+  }
+  undo() {
     this.reverse('undo');
   }
-  redoGraph() {
+  redo() {
     this.reverse('redo');
   }
   private reverse(direction: 'undo' | 'redo') {
-    if (!(direction === 'undo' ? this.canUndoGraph() : this.canRedoGraph())) return;
-    const target = (direction === 'undo' ? this.undoStack : this.redoStack).at(-1)!;
+    if (!(direction === 'undo' ? this.canUndo() : this.canRedo())) return;
+    this.stopCapturing();
+    const from = direction === 'undo' ? this.undoStack : this.redoStack;
+    const to = direction === 'undo' ? this.redoStack : this.undoStack;
+    const target = from.at(-1)!;
+    if (target.type === 'text') {
+      const handle = this.texts.get(target.nodeId)!;
+      const stack = direction === 'undo' ? handle.undo.undoStack : handle.undo.redoStack;
+      if (!handle.loaded || !this.state.nodes.some((n) => n.id === target.nodeId)) {
+        const index = stack.indexOf(target.item);
+        if (index !== -1) stack.splice(index, 1);
+        from.pop();
+        this.update({ notice: 'Отмена пропущена: нода недоступна для редактирования.' });
+        return;
+      }
+      from.pop();
+      // Yjs normally skips empty items and continues into older actions. Isolate
+      // this one item so a remote deletion cannot jump across a graph action.
+      const index = stack.indexOf(target.item);
+      if (index === -1) {
+        this.update();
+        return;
+      }
+      const older = stack.splice(0, index);
+      this.reversingText = true;
+      try {
+        const result = direction === 'undo' ? handle.undo.undo() : handle.undo.redo();
+        const opposite = direction === 'undo' ? handle.undo.redoStack : handle.undo.undoStack;
+        const item = opposite.at(-1);
+        if (result && item) to.push({ ...target, item });
+      } finally {
+        stack.unshift(...older);
+        this.reversingText = false;
+        this.update();
+      }
+      return;
+    }
     const operationId = crypto.randomUUID();
     this.reversals.set(operationId, { direction, target });
-    this.command({ type: 'reverse-graph', operationId, targetOperationId: target });
+    this.command({ type: 'reverse-graph', operationId, targetOperationId: target.operationId });
   }
   private finishHistory(operationId: string, accepted: boolean) {
     const operation = this.pending.get(operationId);
@@ -74,13 +137,31 @@ export class DialogueSession {
       const from = reversal.direction === 'undo' ? this.undoStack : this.redoStack;
       const to = reversal.direction === 'undo' ? this.redoStack : this.undoStack;
       if (from.at(-1) === reversal.target) from.pop();
-      if (accepted) to.push(operationId);
+      if (accepted) to.push({ type: 'graph', operationId });
       this.reversals.delete(operationId);
-    } else if (accepted && operation.type !== 'reverse-graph') {
-      this.undoStack.push(operationId);
-      this.redoStack = [];
+    } else if (!accepted) {
+      this.undoStack = this.undoStack.filter(
+        (entry) => entry.type !== 'graph' || entry.operationId !== operationId,
+      );
     }
   }
+  private historyKey = (event: KeyboardEvent) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const undo = event.code === 'KeyZ' && !event.shiftKey;
+    const redo = (event.code === 'KeyZ' && event.shiftKey) || event.code === 'KeyY';
+    if (!undo && !redo) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      !target.closest('.cm-editor') &&
+      (target.closest('input, textarea, select') || target.isContentEditable)
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (undo) this.undo();
+    else this.redo();
+  };
   private state: SessionState = {
     connected: false,
     status: 'Подключение…',
@@ -99,6 +180,7 @@ export class DialogueSession {
       sessionStorage.setItem('nodic-tab', sessionId);
     }
     this.outboxPrefix = `nodic:${sessionId}:${dialogueId}:`;
+    window.addEventListener('keydown', this.historyKey, true);
     window.addEventListener('offline', this.offline);
     window.addEventListener('online', this.online);
     void this.initialize();
@@ -315,7 +397,15 @@ export class DialogueSession {
     this.command({ type: 'move-nodes', operationId: crypto.randomUUID(), positions });
   }
   command(command: GraphCommand) {
-    if (!this.canMove()) return;
+    if (
+      !this.state.connected ||
+      this.failed ||
+      (this.reversals.size > 0 && !this.reversals.has(command.operationId))
+    )
+      return;
+    this.stopCapturing();
+    if (command.type !== 'reverse-graph')
+      this.remember({ type: 'graph', operationId: command.operationId });
     const message: Pending = { ...command, order: ++this.moveOrder };
     this.pending.set(message.operationId, message);
     this.status();
@@ -333,7 +423,7 @@ export class DialogueSession {
     this.update({ notice: '' });
   }
   canMove() {
-    return this.state.connected && !this.failed;
+    return this.state.connected && !this.failed && !this.reversals.size;
   }
   private ensureText(nodeId: string) {
     let handle = this.texts.get(nodeId);
@@ -350,6 +440,11 @@ export class DialogueSession {
     };
     this.texts.set(nodeId, handle);
     const current = handle;
+    current.undo.on('stack-item-added', ({ stackItem }) => {
+      if (this.reversingText) return;
+      for (const [id, other] of this.texts) if (id !== nodeId) other.undo.stopCapturing();
+      this.remember({ type: 'text', nodeId, item: stackItem });
+    });
     doc.on('update', (bytes: Uint8Array, origin: unknown) => {
       if (origin === REMOTE || this.stopped) return;
       const message: Pending = {
@@ -383,10 +478,11 @@ export class DialogueSession {
     return handle;
   }
   canEdit(handle: TextHandle) {
-    return this.state.connected && handle.loaded && !this.failed;
+    return this.state.connected && handle.loaded && !this.failed && !this.reversals.size;
   }
   destroy() {
     this.stopped = true;
+    window.removeEventListener('keydown', this.historyKey, true);
     window.removeEventListener('offline', this.offline);
     window.removeEventListener('online', this.online);
     clearTimeout(this.timer);
