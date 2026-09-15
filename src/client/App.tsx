@@ -83,12 +83,12 @@ const StoryNode = memo(
           </div>
         )}
         {n.kind === 'choice' && (
-          <svg className="choice-shape" viewBox="0 0 270 180" aria-hidden="true">
-            <path d="M 128 12 Q 135 2 142 12 L 260 165 Q 269 176 254 176 L 16 176 Q 1 176 10 165 Z" />
+          <svg className="choice-shape" viewBox="0 0 240 205" aria-hidden="true">
+            <path d="M 120 0 L 240 205 L 0 205 Z" />
           </svg>
         )}
         {n.kind !== 'start' && <Handle type="target" position={Position.Left} aria-label="Вход" />}
-        {n.kind !== 'choice' && (
+        {(n.kind === 'start' || n.kind === 'end') && (
           <div className="node-label">
             <span>{n.kind === 'start' ? '↗' : n.kind === 'end' ? '◼' : '≋'}</span>
             {names[n.kind]}
@@ -97,12 +97,14 @@ const StoryNode = memo(
         {(n.kind === 'line' || n.kind === 'choice') && (
           <>
             {n.kind === 'line' && (
-              <div className="node-character">
+              <div className="node-label node-character">
                 {data.characterName ||
                   (n.characterMissing ? 'Неизвестный персонаж' : 'Без персонажа')}
               </div>
             )}
-            <p>{n.preview || (n.kind === 'line' ? 'Двойной клик, чтобы написать…' : '')}</p>
+            <p className={n.preview ? undefined : 'node-placeholder'}>
+              {n.preview || 'Двойной клик, чтобы написать…'}
+            </p>
           </>
         )}
         {n.kind !== 'end' && <Handle type="source" position={Position.Right} aria-label="Выход" />}

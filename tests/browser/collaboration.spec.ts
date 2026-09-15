@@ -618,7 +618,9 @@ test('one history follows text, movement and another editor despite focus and fo
     await page.getByTestId('node-line').dblclick();
     await editor.press('Control+z');
     await saved();
-    await expect(other.getByTestId('node-choice').locator('p')).toHaveText('');
+    await expect(other.getByTestId('node-choice').locator('p')).toHaveText(
+      'Двойной клик, чтобы написать…',
+    );
     await editor.press('Control+z');
     await saved();
     await expect.poll(() => position(other)).toBe(initial);
