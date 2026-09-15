@@ -417,6 +417,19 @@ label input {
   box-shadow: 0 3px 8px #00000000;
   overflow: visible;
 }
+.socket-measurement-stage {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 320px;
+  height: 400px;
+  opacity: 0;
+  pointer-events: none;
+}
+.board-header button[aria-pressed='true'] {
+  background: var(--text);
+  color: var(--background);
+}
 .node-label {
   display: flex;
   gap: 7px;
@@ -703,7 +716,7 @@ label input {
 }
 
 .react-flow__node.selected .story-node:not(.kind-choice) {
-  border: 2px solid var(--accent);
+  border: 1px solid var(--accent);
   box-shadow: 0 0 0 4px #00000000;
 }
 .react-flow__node.selected .choice-shape path {

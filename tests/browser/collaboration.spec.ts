@@ -11,7 +11,9 @@ test('two browser sessions edit one reply and undo only their own text', async (
   await page.getByRole('button', { name: 'Поделиться' }).click();
   const editorLink = await page.getByLabel('Ссылка редактора').inputValue();
   await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
-  await page.locator('.react-flow__pane').click({ button: 'right', position: { x: 400, y: 220 } });
+  await page
+    .locator('.canvas-area .react-flow__pane')
+    .click({ button: 'right', position: { x: 400, y: 220 } });
   await page.getByRole('button', { name: 'Реплика', exact: true }).click();
   await page.getByTestId('node-line').dblclick();
   const editorA = page.getByRole('textbox', { name: 'Текст реплики' });
@@ -110,7 +112,7 @@ test('authors connect and shape edges, assign characters, delete nodes and add d
   const link = await page.getByLabel('Ссылка редактора').inputValue();
   await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
   await expect(page.locator('.node-toolbar')).toHaveCount(0);
-  const pane = page.locator('.react-flow__pane');
+  const pane = page.locator('.canvas-area .react-flow__pane');
   await pane.click({ button: 'right', position: { x: 930, y: 250 } });
   await page.getByRole('button', { name: 'Реплика', exact: true }).click();
   await pane.click({ button: 'right', position: { x: 1040, y: 610 } });
@@ -289,7 +291,7 @@ test('a lost creation response is replayed after reload without duplicate nodes'
       await route.abort('failed');
     });
     await page
-      .locator('.react-flow__pane')
+      .locator('.canvas-area .react-flow__pane')
       .click({ button: 'right', position: { x: 400, y: 220 } });
     await page.getByRole('button', { name: 'Реплика', exact: true }).click();
     await expect.poll(() => keys.length).toBe(2);
@@ -325,7 +327,7 @@ for (const kind of ['dialogues', 'characters'] as const) {
     await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
     if (kind === 'characters') {
       await page
-        .locator('.react-flow__pane')
+        .locator('.canvas-area .react-flow__pane')
         .click({ button: 'right', position: { x: 400, y: 220 } });
       await page.getByRole('button', { name: 'Реплика', exact: true }).click();
       await page.getByTestId('node-line').dblclick();
@@ -437,7 +439,7 @@ test('creation and deletion undo restore the same node and its shared text', asy
     await other.goto(link);
     await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
     await page
-      .locator('.react-flow__pane')
+      .locator('.canvas-area .react-flow__pane')
       .click({ button: 'right', position: { x: 400, y: 220 } });
     await page.getByRole('button', { name: 'Реплика', exact: true }).click();
     await expect(other.getByTestId('node-line')).toHaveCount(1);
@@ -512,7 +514,7 @@ test('lost Undo and Redo receipts replay after reconnect without losing history'
     await other.goto(link);
     await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
     await page
-      .locator('.react-flow__pane')
+      .locator('.canvas-area .react-flow__pane')
       .click({ button: 'right', position: { x: 400, y: 220 } });
     await page.getByRole('button', { name: 'Реплика', exact: true }).click();
     await expect(other.getByTestId('node-line')).toHaveCount(1);
@@ -571,7 +573,9 @@ test('one history follows text, movement and another editor despite focus and fo
     [400, 'Реплика'],
     [720, 'Вариант'],
   ] as const) {
-    await page.locator('.react-flow__pane').click({ button: 'right', position: { x, y: 280 } });
+    await page
+      .locator('.canvas-area .react-flow__pane')
+      .click({ button: 'right', position: { x, y: 280 } });
     await page.getByRole('button', { name: kind, exact: true }).click();
     await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
   }
@@ -698,7 +702,7 @@ test('a delayed creation receipt keeps creation before later text in history', a
   });
   try {
     await page
-      .locator('.react-flow__pane')
+      .locator('.canvas-area .react-flow__pane')
       .click({ button: 'right', position: { x: 400, y: 280 } });
     await page.getByRole('button', { name: 'Реплика', exact: true }).click();
     await expect(page.getByTestId('node-line')).toHaveCount(1);
@@ -737,7 +741,9 @@ test('selected nodes delete together and undo together while start stays protect
     [400, 'Реплика'],
     [720, 'Вариант'],
   ] as const) {
-    await page.locator('.react-flow__pane').click({ button: 'right', position: { x, y: 280 } });
+    await page
+      .locator('.canvas-area .react-flow__pane')
+      .click({ button: 'right', position: { x, y: 280 } });
     await page.getByRole('button', { name: kind, exact: true }).click();
     await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
   }
@@ -786,7 +792,9 @@ test('a branch copies between dialogues and undo removes the whole independent p
     [400, 'Реплика'],
     [720, 'Вариант'],
   ] as const) {
-    await page.locator('.react-flow__pane').click({ button: 'right', position: { x, y: 280 } });
+    await page
+      .locator('.canvas-area .react-flow__pane')
+      .click({ button: 'right', position: { x, y: 280 } });
     await page.getByRole('button', { name: kind, exact: true }).click();
     await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
   }
@@ -825,7 +833,7 @@ test('a branch copies between dialogues and undo removes the whole independent p
     await expect(page.getByTestId('node-line')).toHaveCount(0);
     await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
     await page
-      .locator('.react-flow__pane')
+      .locator('.canvas-area .react-flow__pane')
       .click({ button: 'right', position: { x: 380, y: 280 } });
     await page.getByRole('button', { name: 'Вставить ноды', exact: true }).click();
     await expect(page.getByTestId('node-line').locator('p')).toHaveText('Исходник');
@@ -980,7 +988,9 @@ test('the character catalogue updates authors in different dialogues and preserv
   const context = await browser.newContext();
   const other = await context.newPage();
   const line = async (p: typeof page, text: string) => {
-    await p.locator('.react-flow__pane').click({ button: 'right', position: { x: 400, y: 280 } });
+    await p
+      .locator('.canvas-area .react-flow__pane')
+      .click({ button: 'right', position: { x: 400, y: 280 } });
     await p.getByRole('button', { name: 'Реплика', exact: true }).click();
     await p.getByTestId('node-line').dblclick();
     await p.getByRole('textbox', { name: 'Текст реплики' }).fill(text);
@@ -1076,7 +1086,7 @@ test('owners delete open dialogues and projects while editors can rename and are
     await expect(page.getByRole('link', { name: 'Удаляемый диалог' })).toBeVisible();
     await editorDialog.getByRole('button', { name: 'Закрыть', exact: true }).click();
     await other
-      .locator('.react-flow__pane')
+      .locator('.canvas-area .react-flow__pane')
       .click({ button: 'right', position: { x: 400, y: 280 } });
     await other.getByRole('button', { name: 'Реплика', exact: true }).click();
     await other.getByTestId('node-line').dblclick();
@@ -1141,7 +1151,9 @@ test('board authors share cursor and selection identity and leave on disconnect 
   await page.getByLabel('Ваше имя').fill('Аня');
   await page.getByLabel('Ваше имя').press('Enter');
   await page.getByTestId('board-presence-count').click();
-  await page.locator('.react-flow__pane').click({ button: 'right', position: { x: 400, y: 280 } });
+  await page
+    .locator('.canvas-area .react-flow__pane')
+    .click({ button: 'right', position: { x: 400, y: 280 } });
   await page.getByRole('button', { name: 'Реплика', exact: true }).click();
   const context = await browser.newContext();
   const other = await context.newPage();

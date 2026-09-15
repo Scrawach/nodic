@@ -1,9 +1,10 @@
-import { type CSSProperties, memo, useEffect, useState, useSyncExternalStore } from 'react';
+import { type CSSProperties, memo, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
   ViewportPortal,
   Background,
+  BackgroundVariant,
   MiniMap,
   Controls,
   Handle,
@@ -115,6 +116,11 @@ const StoryNode = memo(
 const nodeTypes = { story: StoryNode };
 const edgeTypes = { story: StoryEdge };
 const icons: Record<NodeKind, string> = { start: '↗', line: '≋', choice: '△', end: '◼' };
+const gridStep = 24;
+const gridDelta = (point: { x: number; y: number }) => ({
+  x: Math.round(point.x / gridStep) * gridStep - point.x,
+  y: Math.round(point.y / gridStep) * gridStep - point.y,
+});
 
 function Board({ project: initialProject, dialogueId }: { project: Project; dialogueId: string }) {
   const [project, setProject] = useState(initialProject);
@@ -131,6 +137,53 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
   const [error, setError] = useState(takeNotice);
   const [menu, setMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string }>();
   const flow = useReactFlow();
+  const [snap, setSnap] = useState(true);
+  const [samples, setSamples] = useState<
+    Node<{
+      story: DialogueNode;
+      characterName?: string;
+      characterColor?: string;
+      authors?: { name: string; color: string }[];
+    }>[]
+  >([]);
+  const sampleReaders = useRef(new Map<string, () => { x: number; y: number } | undefined>());
+  // Use the actual rendered sockets: line height depends on text and character name.
+  const socketOffset = (id: string) => {
+    const bounds = flow.getInternalNode(id)?.internals.handleBounds;
+    const handles = [...(bounds?.target || []), ...(bounds?.source || [])];
+    const handle = handles.find((h) => h.position === Position.Left) || handles[0];
+    return handle && { x: handle.x + handle.width / 2, y: handle.y + handle.height / 2 };
+  };
+  const measureSocket = async (story: DialogueNode) => {
+    const id = `measure-${crypto.randomUUID()}`;
+    const character = project.characters.find((c) => c.id === story.characterId);
+    setSamples((nodes) => [
+      ...nodes,
+      {
+        id,
+        type: 'story',
+        position: { x: 0, y: 0 },
+        data: { story, characterName: character?.name, characterColor: character?.color },
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        focusable: false,
+        style: { opacity: 0, pointerEvents: 'none' },
+        className: 'socket-measurement',
+      },
+    ]);
+    try {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const offset = sampleReaders.current.get(id)?.();
+        if (offset) return offset;
+      }
+      throw new Error('Не удалось измерить сокет. Повторите действие.');
+    } finally {
+      sampleReaders.current.delete(id);
+      setSamples((nodes) => nodes.filter((node) => node.id !== id));
+    }
+  };
   const [boardNodes, setBoardNodes] = useState<
     Node<{
       story: DialogueNode;
@@ -195,15 +248,28 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
   );
   const add = async (kind: Exclude<NodeKind, 'start'>, point?: { x: number; y: number }) => {
     if (!session.canMove()) return;
+    setMenu(undefined);
     const position = flow.screenToFlowPosition(point || { x: innerWidth / 2, y: innerHeight / 2 });
     const creation = session.beginCreation();
     try {
+      if (snap) {
+        const offset = await measureSocket({
+          id: '',
+          kind,
+          x: 0,
+          y: 0,
+          preview: '',
+          characterId: null,
+        });
+        const delta = gridDelta({ x: position.x + offset.x, y: position.y + offset.y });
+        position.x += delta.x;
+        position.y += delta.y;
+      }
       const created = await api<{ operationId?: string }>(`/dialogues/${dialogueId}/nodes`, {
         kind,
         ...position,
       });
       session.finishCreation(creation, created.operationId);
-      setMenu(undefined);
     } catch (e) {
       session.finishCreation(creation);
       setError(String(e));
@@ -232,15 +298,30 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
       setError(String(e));
     }
   };
-  const pasteNodes = (point?: { x: number; y: number }) => {
+  const pasteNodes = async (point?: { x: number; y: number }) => {
     if (!session.canMove()) return;
+    setMenu(undefined);
     try {
       const fragment = pastedFragment(
         project.id,
         flow.screenToFlowPosition(point || { x: innerWidth / 2, y: innerHeight / 2 }),
       );
+      if (snap) {
+        const leader = fragment.nodes[0];
+        const offset = await measureSocket({ ...leader, preview: leader.text.slice(0, 240) });
+        const delta = gridDelta({ x: leader.x + offset.x, y: leader.y + offset.y });
+        for (const node of fragment.nodes) {
+          node.x += delta.x;
+          node.y += delta.y;
+        }
+        for (const edge of fragment.edges) {
+          if (edge.bend) {
+            edge.bend.x += delta.x;
+            edge.bend.y += delta.y;
+          }
+        }
+      }
       session.command({ type: 'paste-nodes', operationId: crypto.randomUUID(), fragment });
-      setMenu(undefined);
     } catch (e) {
       setError(String(e));
     }
@@ -363,6 +444,13 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             <strong>{project.dialogues.find((d) => d.id === dialogueId)?.name}</strong>
           </div>
           <div className="button-row">
+            <button
+              aria-pressed={snap}
+              onClick={() => setSnap((value) => !value)}
+              title="Шаг 24 · привязка по первому левому сокету"
+            >
+              Привязка к сетке
+            </button>
             <button disabled={!session.canUndo()} onClick={() => session.undo()}>
               Отменить
             </button>
@@ -411,11 +499,20 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
         <ReactFlow
           nodes={boardNodes}
           onNodesChange={(changes) => setBoardNodes((nodes) => applyNodeChanges(changes, nodes))}
-          onNodeDragStop={(_, node, nodes) =>
+          onNodeDragStop={(_, node, nodes) => {
+            const offset = socketOffset(node.id);
+            const delta =
+              snap && offset
+                ? gridDelta({ x: node.position.x + offset.x, y: node.position.y + offset.y })
+                : { x: 0, y: 0 };
             session.moveNodes(
-              (nodes.length ? nodes : [node]).map((n) => ({ nodeId: n.id, ...n.position })),
-            )
-          }
+              (nodes.length ? nodes : [node]).map((n) => ({
+                nodeId: n.id,
+                x: n.position.x + delta.x,
+                y: n.position.y + delta.y,
+              })),
+            );
+          }}
           edges={state.edges.map((edge) => ({
             ...edge,
             type: 'story',
@@ -494,7 +591,12 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             setMenu({ x: event.clientX, y: event.clientY });
           }}
         >
-          <Background color="#343437" gap={24} size={1} />
+          <Background
+            variant={BackgroundVariant.Lines}
+            color="rgba(214, 213, 207, 0.055)"
+            gap={gridStep}
+            lineWidth={1}
+          />
           <MiniMap nodeColor="#9b9b9c" pannable zoomable />
           <Controls showInteractive={false} />
           <ViewportPortal>
@@ -621,6 +723,27 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           </div>
         )}
       </main>
+      {samples.map((sample) => (
+        <div key={sample.id} aria-hidden="true" inert className="socket-measurement-stage">
+          <ReactFlowProvider>
+            <ReactFlow
+              nodes={[sample]}
+              nodeTypes={nodeTypes}
+              defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+              onInit={(instance) =>
+                sampleReaders.current.set(sample.id, () => {
+                  const bounds = instance.getInternalNode(sample.id)?.internals.handleBounds;
+                  const handles = [...(bounds?.target || []), ...(bounds?.source || [])];
+                  const handle = handles.find((h) => h.position === Position.Left) || handles[0];
+                  return (
+                    handle && { x: handle.x + handle.width / 2, y: handle.y + handle.height / 2 }
+                  );
+                })
+              }
+            />
+          </ReactFlowProvider>
+        </div>
+      ))}
       {characterEditor && (
         <div className="modal-backdrop">
           <section
