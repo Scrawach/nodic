@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>404 — Scrawach</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/horror.css">
+<style>
+body{min-height:100svh;display:flex;flex-direction:column}
+header,main,footer{width:calc(100% - 60px);max-width:1180px;margin-left:auto;margin-right:auto}
+header{flex-shrink:0}.error-page{flex:1;display:flex;flex-direction:column;justify-content:center;position:relative;isolation:isolate;padding:70px 0 90px}
+.error-page:before{content:"";position:absolute;inset:12% 0;z-index:-1;pointer-events:none;background:radial-gradient(#98989e .7px,transparent .8px);background-size:4px 4px;opacity:.24;mask-image:radial-gradient(ellipse at 75% 45%,#000,transparent 65%)}
+.error-code{font-size:clamp(90px,19vw,220px);font-weight:700;line-height:1;letter-spacing:-.06em;margin:0 0 22px;color:var(--text)}
+.error-page h1{font-size:clamp(24px,4vw,36px);letter-spacing:-1px;margin:0}
+.error-description{max-width:480px;color:var(--muted);margin:18px 0 32px}.home-link{align-self:flex-start;border:1px solid #555558;padding:10px 18px;font-size:14px}.home-link:hover{background:#242426;border-color:var(--text)}
+@media(max-width:700px){header,main,footer{width:calc(100% - 36px)}.error-page{padding:48px 0 64px}}
+</style>
+</head>
+<body>
+<header><span class="brand"><span aria-hidden="true">[s]</span><b>Scrawach</b></span><span class="muted">404</span></header>
+<main class="error-page"><p class="eyebrow">ОШИБКА / 404</p><p class="error-code" aria-hidden="true">404</p><h1>Страница не найдена</h1><p class="error-description">Проверьте адрес или вернитесь на главную страницу.</p><a class="home-link" href="/">На главную <span aria-hidden="true">↗</span></a></main>
+<footer><span>SCRAWACH</span><span class="muted">404 / NOT FOUND</span></footer>
+</body>
+</html>

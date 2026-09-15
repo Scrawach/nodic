@@ -1,0 +1,16 @@
+/* Monochrome CRT-inspired theme. Texture stays behind the controls. */
+.platform{display:flex;flex-direction:column}.platform .platform-updated{margin:0 0 18px;font-size:13px;line-height:1.6}.platform-updated span{display:inline-block;margin-bottom:4px;color:var(--muted)}.platform-updated time{color:var(--text);overflow-wrap:anywhere}.platform .download{margin-top:auto}
+:root{--bg:#0b0b0d;--surface:#141416;--line:#343437;--text:#d6d5cf;--muted:#9b9b9c;--accent:#c4bdb2}
+body{font-family:"Courier New",monospace}
+header{height:82px;gap:20px}.brand{letter-spacing:0;gap:14px}.brand span{font-size:24px;color:#a64a48}.brand b{font-size:17px;margin:0}.studio{letter-spacing:2px}
+.intro{padding:42px 0 36px}h1{font-weight:700;font-size:clamp(32px,4.5vw,56px);margin:0}.eyebrow{color:var(--muted);font-weight:400;margin:0 0 12px}.about{line-height:1.7}
+h2{font-size:16px;font-weight:400}.section-top{margin-bottom:13px}.badge{border-radius:0;font-size:12px;padding:2px 8px}
+.player{aspect-ratio:2.3;background:#101013;border-color:#515154;border-radius:0;box-shadow:0 12px 40px #0005}.player canvas{image-rendering:pixelated}.player iframe{z-index:2}
+#overlay{background:radial-gradient(ellipse at center,#101014e8,transparent 60%),repeating-linear-gradient(0deg,#0002 0px,#0002 1px,transparent 1px,transparent 4px);box-shadow:inset 0 0 100px 30px #0009}
+#overlay .eyebrow{color:var(--muted);font-size:12px;letter-spacing:2px;margin:0 0 16px}
+.screen-label,.screen-index{position:absolute;color:#939397;font-size:12px;letter-spacing:2px}.screen-label{top:22px;left:25px}.screen-label:before{content:"";display:inline-block;width:6px;height:6px;background:#a64a48;margin-right:11px}.screen-index{right:25px;bottom:22px}
+#play{border:1px solid #dedcd5;background:var(--text);color:#151517;border-radius:0;padding:13px 37px;min-width:180px;font-weight:700;justify-content:center;gap:18px;box-shadow:4px 4px 0 #0007}#play:disabled{opacity:1;background:#272729;color:#929294;border-color:#4d4d50}#play:hover:enabled{background:#f0eee9;box-shadow:4px 4px 0 #783e3d}#player-note{font-size:14px;color:#aaa9aa;margin:18px 16px 0;text-align:center}
+.player-bottom{gap:18px}#fullscreen{white-space:nowrap}#downloads{padding:30px 0 20px}#downloads .muted{font-size:12px;letter-spacing:1px}
+.platforms{grid-template-columns:repeat(4,minmax(0,1fr));gap:0;border-top:1px solid var(--line);border-left:1px solid var(--line)}.platform{border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);border-radius:0;padding:23px}.platform p{margin:18px 0 22px}.download{border-radius:0;border-color:#555558}.download:hover{background:#242426;border-color:var(--text);color:var(--text)}.download[aria-disabled=true]{opacity:1;color:#89898c;border-color:#38383b}.updated{margin-top:18px}footer{padding:20px 0 28px;gap:20px;letter-spacing:1px}
+@media(max-width:700px){.intro{padding:30px 0}.player{aspect-ratio:1.25}.platforms{grid-template-columns:repeat(2,minmax(0,1fr))}.platform{padding:18px}.player-bottom{align-items:start}.screen-label{top:16px;left:16px}.screen-index{bottom:14px;right:16px}}
+@media(max-width:360px){.platforms{grid-template-columns:1fr}.brand b{font-size:14px}.player{aspect-ratio:1}.player-bottom{flex-wrap:wrap}}
