@@ -453,6 +453,11 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             event.preventDefault();
             setMenu({ x: event.clientX, y: event.clientY, nodeId: node.id });
           }}
+          onSelectionContextMenu={(event, nodes) => {
+            event.preventDefault();
+            const node = nodes.find((n) => n.data.story.kind !== 'start') || nodes[0];
+            if (node) setMenu({ x: event.clientX, y: event.clientY, nodeId: node.id });
+          }}
           onEdgeContextMenu={(event, edge) => {
             event.preventDefault();
             setSelectedEdge(edge.id);
@@ -462,6 +467,11 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           nodesDraggable={session.canMove()}
           deleteKeyCode={null}
           multiSelectionKeyCode="Shift"
+          panOnDrag={[1]}
+          panActivationKeyCode={null}
+          selectionKeyCode={null}
+          selectionOnDrag
+          autoPanOnSelection={false}
           nodesConnectable={session.canMove()}
           connectionRadius={28}
           zoomOnDoubleClick={false}
@@ -511,8 +521,8 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           </ViewportPortal>
         </ReactFlow>
         <div className="canvas-caption">
-          ПКМ — добавить ноду · Shift — выделить группу · Двойной клик — текст · Потяните связь —
-          изменить кривую
+          Средняя кнопка — двигать доску · ЛКМ — рамка выделения · Shift+клик — добавить к выделению
+          · ПКМ — меню · Двойной клик — текст · Потяните связь — изменить кривую
         </div>
         {(error || state.notice) && (
           <div

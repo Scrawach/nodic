@@ -836,7 +836,7 @@ test('a branch copies between dialogues and undo removes the whole independent p
     await expect(page.locator('.story-edge')).toHaveCount(0);
     await page.getByRole('button', { name: 'Повторить', exact: true }).click();
     await expect(page.getByTestId('node-line').locator('p')).toHaveText('Исходник');
-    await page.getByTestId('node-line').dblclick();
+    await page.getByTestId('node-line').locator('.node-label').dblclick();
     await page.getByRole('textbox', { name: 'Текст реплики' }).fill('Независимая копия');
     await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
     await expect(other.getByTestId('node-line').locator('p')).toHaveText('Изменён исходник');
@@ -1162,8 +1162,8 @@ test('board authors share cursor and selection identity and leave on disconnect 
     await page.getByTestId('node-line').click();
     await expect(other.getByTestId('remote-node-selection')).toHaveText('Аня');
     await other.screenshot({ path: 'test-results/board-presence.png', fullPage: true });
-    await page.getByTestId('node-line').dblclick();
-    await other.getByTestId('node-line').dblclick();
+    await page.getByTestId('node-line').locator('.node-label').dblclick();
+    await other.getByTestId('node-line').locator('.node-label').dblclick();
     await expect(other.getByTestId('editor-presence')).toContainText('2');
     await expect(other.locator('.cm-ySelectionInfo')).toContainText('Аня');
     await page.getByRole('button', { name: 'Закрыть', exact: true }).click();

@@ -529,6 +529,7 @@ label input {
 .canvas-caption {
   position: absolute;
   left: 80px;
+  right: 230px;
   bottom: 34px;
   font-size: 12px;
   color: var(--muted);
@@ -705,11 +706,16 @@ label input {
   background: var(--accent);
   box-shadow: 0 0 0 5px #00000000;
 }
-.story-edge {
-  cursor: grab;
-}
+.react-flow__pane,
+.react-flow__pane.draggable,
+.react-flow__pane.dragging,
+.react-flow__pane.selection,
+.react-flow__node.draggable,
+.react-flow__node.draggable.dragging,
+.react-flow__nodesselection-rect,
+.story-edge,
 .story-edge:active {
-  cursor: grabbing;
+  cursor: default;
 }
 .story-edge.is-selected .react-flow__edge-path {
   filter: drop-shadow(0 0 3px #00000000);
