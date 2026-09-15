@@ -1,6 +1,7 @@
 import { createOnce } from './creation';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
+import { randomUUID } from 'node:crypto';
 import type WebSocket from 'ws';
 import * as Y from 'yjs';
 import * as decoding from 'lib0/decoding';
@@ -11,7 +12,7 @@ import {
   removeAwarenessStates,
 } from 'y-protocols/awareness';
 import { z } from 'zod';
-import { clientMessage, graphCommand } from '../shared/protocol';
+import { clientMessage, graphCommand, boardPresence, type BoardAuthor } from '../shared/protocol';
 import type { DialogueNode } from '../shared/model';
 import { hash, requireDialogue, AccessError, dialogueActor } from './access';
 import { transaction } from './database';
@@ -19,6 +20,9 @@ import { applyGraph, readGraph } from './graph';
 import { recordGraphAction, reverseGraph } from './history';
 
 interface Peer {
+  id: string;
+  alive: boolean;
+  board?: BoardAuthor;
   socket: WebSocket;
   texts: Set<string>;
   awarenessIds: Map<string, number>;
@@ -34,6 +38,24 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
   const broadcast = (dialogueId: string, message: unknown) => {
     for (const peer of rooms.get(dialogueId) || []) send(peer.socket, message);
   };
+  const broadcastPresence = (dialogueId: string) => {
+    const authors = [...(rooms.get(dialogueId) || [])].flatMap((peer) =>
+      peer.board ? [peer.board] : [],
+    );
+    broadcast(dialogueId, { type: 'board-presence', authors });
+  };
+  const heartbeat = setInterval(() => {
+    for (const room of rooms.values())
+      for (const peer of room) {
+        if (!peer.alive) {
+          peer.socket.terminate();
+          continue;
+        }
+        peer.alive = false;
+        if (peer.socket.readyState === 1) peer.socket.ping();
+      }
+  }, 15_000);
+  heartbeat.unref();
   const enqueue = <T>(id: string, operation: () => Promise<T>) => {
     const next = (queues.get(id) || Promise.resolve()).catch(() => {}).then(operation);
     queues.set(id, next);
@@ -66,11 +88,35 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
     },
     (socket, request) => {
       const { dialogueId } = z.object({ dialogueId: z.uuid() }).parse(request.params);
-      const peer: Peer = { socket, texts: new Set(), awarenessIds: new Map() };
+      const peer: Peer = {
+        id: randomUUID(),
+        alive: true,
+        socket,
+        texts: new Set(),
+        awarenessIds: new Map(),
+      };
       const room = rooms.get(dialogueId) || new Set<Peer>();
       rooms.set(dialogueId, room);
       room.add(peer);
+      socket.on('pong', () => {
+        peer.alive = true;
+      });
       socket.on('message', (raw) => {
+        // Presence never waits for persistence and is never written to the outbox/DB.
+        try {
+          const message = JSON.parse(raw.toString());
+          if (message.type === 'board-presence') {
+            const parsed = boardPresence.safeParse(message);
+            if (parsed.success) {
+              const { type: _type, ...state } = parsed.data;
+              peer.board = { ...state, id: peer.id };
+              broadcastPresence(dialogueId);
+            }
+            return;
+          }
+        } catch {
+          return;
+        }
         void enqueue(dialogueId, async () => {
           let operationId: string | undefined;
           try {
@@ -259,6 +305,7 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
       });
       socket.on('close', () => {
         room.delete(peer);
+        broadcastPresence(dialogueId);
         for (const [nodeId, clientId] of peer.awarenessIds) {
           const entry = presence.get(nodeId);
           if (!entry) continue;
@@ -282,12 +329,14 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
       });
       socket.on('error', () => {});
       void enqueue(dialogueId, async () => {
-        send(socket, { type: 'ready', ...(await readGraph(pool, dialogueId)) });
+        send(socket, { type: 'ready', peerId: peer.id, ...(await readGraph(pool, dialogueId)) });
       }).catch(() => socket.close(1011));
       broadcast(dialogueId, { type: 'peers', count: room.size });
+      broadcastPresence(dialogueId);
     },
   );
   app.addHook('preClose', async () => {
+    clearInterval(heartbeat);
     for (const room of rooms.values()) for (const peer of room) peer.socket.terminate();
     await Promise.allSettled([...queues.values()]);
     for (const entry of presence.values()) {

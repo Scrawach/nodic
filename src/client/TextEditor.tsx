@@ -49,9 +49,7 @@ export function TextEditor({
   const enabled = session.canEdit(handle);
   useEffect(() => {
     if (!handle.loaded || !host.current || view.current) return;
-    const name =
-      sessionStorage.getItem('nodic-name') || `Автор ${String(handle.doc.clientID).slice(-3)}`;
-    handle.awareness.setLocalState({ user: { name, color: '#b97946', colorLight: '#b9794633' } });
+    handle.awareness.setLocalState({ user: session.author });
     handle.undo.stopCapturing();
     const editor = new EditorView({
       parent: host.current,
@@ -81,6 +79,9 @@ export function TextEditor({
   useEffect(() => {
     view.current?.dispatch({ effects: editable.reconfigure(editability(enabled)) });
   }, [editable, enabled]);
+  useEffect(() => {
+    if (handle.loaded) handle.awareness.setLocalStateField('user', { ...session.author });
+  }, [handle, handle.loaded, session.author.name, session.author.color]);
   useEffect(
     () => () => {
       view.current?.destroy();

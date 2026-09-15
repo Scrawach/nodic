@@ -76,8 +76,19 @@ export const graphCommand = z.discriminatedUnion('type', [
   }),
 ]);
 export type GraphCommand = z.infer<typeof graphCommand>;
+export const boardPresence = z.object({
+  type: z.literal('board-presence'),
+  name: z.string().trim().min(1).max(80),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  cursor: z.object({ x: z.number().finite(), y: z.number().finite() }).nullable(),
+  nodeIds: z.array(z.uuid()).max(1000),
+  edgeIds: z.array(z.uuid()).max(1000),
+});
+export type BoardAuthor = Omit<z.infer<typeof boardPresence>, 'type'> & { id: string };
+
 export const clientMessage = z.discriminatedUnion('type', [
   ...graphCommand.options,
+  boardPresence,
   z.object({ type: z.literal('open-text'), nodeId: z.uuid() }),
   z.object({
     type: z.literal('text-update'),

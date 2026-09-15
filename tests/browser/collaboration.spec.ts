@@ -150,6 +150,7 @@ test('authors connect and shape edges, assign characters, delete nodes and add d
     await page.mouse.move(midpoint.x, midpoint.y - 65, { steps: 12 });
     await page.mouse.up();
     await expect(edge).toHaveClass(/is-selected/);
+    await expect(other.getByTestId('remote-edge-selection')).toHaveCount(1);
     await expect(path).toHaveAttribute('d', / Q /);
     const bent = await path.getAttribute('d');
     await expect(other.locator('.story-edge .react-flow__edge-path')).toHaveAttribute('d', bent!);
@@ -971,6 +972,7 @@ test('owners delete open dialogues and projects while editors can rename and are
       .fill('Оставшийся диалог');
     await page.getByRole('button', { name: 'Создать диалог', exact: true }).click();
     await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    await expect.poll(() => new URL(page.url()).pathname).not.toBe(originalPath);
     await page.goto(originalPath);
     await page.getByRole('button', { name: 'Управление проектом', exact: true }).click();
     const ownerDialog = page.getByRole('dialog', { name: 'Управление проектом' });
@@ -1003,6 +1005,75 @@ test('owners delete open dialogues and projects while editors can rename and are
     }
   } finally {
     await directory.close();
+    await context.close();
+  }
+});
+
+test('board authors share cursor and selection identity and leave on disconnect or dialogue change', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Board presence');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const invitation = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const sourcePath = new URL(page.url()).pathname;
+  await page.getByTestId('board-presence-count').click();
+  await page.getByLabel('Ваше имя').fill('Аня');
+  await page.getByLabel('Ваше имя').press('Enter');
+  await page.getByTestId('board-presence-count').click();
+  await page.locator('.react-flow__pane').click({ button: 'right', position: { x: 400, y: 280 } });
+  await page.getByRole('button', { name: 'Реплика', exact: true }).click();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await other.goto(invitation);
+    await other.getByRole('link', { name: 'Первый диалог' }).click();
+    await expect(page.getByTestId('board-presence-count')).toHaveText('◉ 2 на доске');
+    await other.getByTestId('board-presence-count').click();
+    await other.getByLabel('Ваше имя').fill('Борис');
+    await other.getByLabel('Ваше имя').press('Enter');
+    await expect(other.getByRole('list', { name: 'Авторы на доске' })).toContainText('Аня');
+    await other.getByTestId('board-presence-count').click();
+    const box = await page.getByTestId('node-line').boundingBox();
+    if (!box) throw Error('Missing node');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(other.getByTestId('remote-cursor')).toContainText('Аня');
+    const initial = await other.getByTestId('remote-cursor').getAttribute('style');
+    await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 + 40);
+    await expect(other.getByTestId('remote-cursor')).not.toHaveAttribute('style', initial!);
+    await page.getByTestId('node-line').click();
+    await expect(other.getByTestId('remote-node-selection')).toHaveText('Аня');
+    await other.screenshot({ path: 'test-results/board-presence.png', fullPage: true });
+    await page.getByTestId('node-line').dblclick();
+    await other.getByTestId('node-line').dblclick();
+    await expect(other.getByTestId('editor-presence')).toContainText('2');
+    await expect(other.locator('.cm-ySelectionInfo')).toContainText('Аня');
+    await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    await other.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    await page.context().setOffline(true);
+    await expect(other.getByTestId('board-presence-count')).toHaveText('◉ 1 на доске');
+    await expect(other.getByTestId('remote-cursor')).toHaveCount(0);
+    await expect(other.getByTestId('remote-node-selection')).toHaveCount(0);
+    await page.context().setOffline(false);
+    await expect(other.getByTestId('board-presence-count')).toHaveText('◉ 2 на доске');
+    await page.getByRole('button', { name: 'Новый диалог' }).click();
+    await page
+      .getByRole('dialog', { name: 'Новый диалог' })
+      .getByRole('textbox')
+      .fill('Другая доска');
+    await page.getByRole('button', { name: 'Создать диалог', exact: true }).click();
+    await expect(page.getByTestId('board-presence-count')).toHaveText('◉ 1 на доске');
+    await expect(other.getByTestId('board-presence-count')).toHaveText('◉ 1 на доске');
+    await expect(other.getByTestId('remote-node-selection')).toHaveCount(0);
+    await page.goto(sourcePath);
+    await expect(other.getByTestId('board-presence-count')).toHaveText('◉ 2 на доске');
+    await page.getByTestId('board-presence-count').click();
+    await expect(page.getByRole('list', { name: 'Авторы на доске' })).toContainText('Аня');
+    await expect(page.getByRole('list', { name: 'Авторы на доске' })).toContainText('Борис');
+  } finally {
     await context.close();
   }
 });

@@ -2,6 +2,7 @@ import { type CSSProperties, memo, useEffect, useState, useSyncExternalStore } f
 import {
   ReactFlow,
   ReactFlowProvider,
+  ViewportPortal,
   Background,
   MiniMap,
   Controls,
@@ -54,18 +55,33 @@ const names: Record<NodeKind, string> = {
 const StoryNode = memo(
   ({
     data,
-  }: NodeProps<Node<{ story: DialogueNode; characterName?: string; characterColor?: string }>>) => {
+  }: NodeProps<
+    Node<{
+      story: DialogueNode;
+      characterName?: string;
+      characterColor?: string;
+      authors?: { name: string; color: string }[];
+    }>
+  >) => {
     const n = data.story;
     return (
       <div
-        className={`story-node kind-${n.kind}${n.kind === 'line' && data.characterColor ? ' has-character' : ''}`}
+        className={`story-node kind-${n.kind}${n.kind === 'line' && data.characterColor ? ' has-character' : ''}${data.authors?.length ? ' remote-selected' : ''}`}
         data-testid={`node-${n.kind}`}
         style={
           n.kind === 'line' && data.characterColor
-            ? ({ '--character-color': data.characterColor } as CSSProperties)
-            : undefined
+            ? ({
+                '--character-color': data.characterColor,
+                '--author-color': data.authors?.[0]?.color,
+              } as CSSProperties)
+            : ({ '--author-color': data.authors?.[0]?.color } as CSSProperties)
         }
       >
+        {!!data.authors?.length && (
+          <div className="remote-selection-label" data-testid="remote-node-selection">
+            {data.authors.map((a) => a.name).join(', ')}
+          </div>
+        )}
         {n.kind === 'choice' && (
           <svg className="choice-shape" viewBox="0 0 270 180" aria-hidden="true">
             <path d="M 128 12 Q 135 2 142 12 L 260 165 Q 269 176 254 176 L 16 176 Q 1 176 10 165 Z" />
@@ -113,7 +129,12 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
   const [menu, setMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string }>();
   const flow = useReactFlow();
   const [boardNodes, setBoardNodes] = useState<
-    Node<{ story: DialogueNode; characterName?: string; characterColor?: string }>[]
+    Node<{
+      story: DialogueNode;
+      characterName?: string;
+      characterColor?: string;
+      authors?: { name: string; color: string }[];
+    }>[]
   >([]);
   useEffect(() => {
     setBoardNodes((current) =>
@@ -127,13 +148,14 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             story: n,
             characterName: project.characters.find((c) => c.id === n.characterId)?.name,
             characterColor: project.characters.find((c) => c.id === n.characterId)?.color,
+            authors: state.authors.filter((a) => a.id !== state.selfId && a.nodeIds.includes(n.id)),
           },
           position: prior?.dragging && state.connected ? prior.position : { x: n.x, y: n.y },
           dragging: state.connected && prior?.dragging,
         };
       }),
     );
-  }, [state.nodes, state.connected, project.characters]);
+  }, [state.nodes, state.connected, project.characters, state.authors, state.selfId]);
   useEffect(() => {
     let cancelled = false;
     void api<Project>(`/projects/${project.id}`)
@@ -206,6 +228,12 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
       setError(String(e));
     }
   };
+  useEffect(() => {
+    session.setSelection(
+      boardNodes.filter((n) => n.selected).map((n) => n.id),
+      selectedEdge ? [selectedEdge] : [],
+    );
+  }, [boardNodes, selectedEdge, session]);
   const links = recents().find((p) => p.id === project.id);
   return (
     <div
@@ -270,7 +298,18 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           Общая история начинается здесь
         </div>
       </aside>
-      <main className="canvas-area">
+      <main
+        className="canvas-area"
+        onPointerMove={(event) => {
+          const target = event.target;
+          session.setCursor(
+            target instanceof Element && target.closest('.react-flow')
+              ? flow.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+              : null,
+          );
+        }}
+        onPointerLeave={() => session.setCursor(null)}
+      >
         <header className="board-header">
           <div>
             <span className="breadcrumb">{project.name} /</span>
@@ -283,7 +322,33 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             <button disabled={!session.canRedo()} onClick={() => session.redo()}>
               Повторить
             </button>
-            <span className="presence-pill">◉ {state.peers} на доске</span>
+            <details className="presence-list">
+              <summary data-testid="board-presence-count">
+                ◉ {state.authors.length} на доске
+              </summary>
+              <div className="presence-panel">
+                <label>
+                  Ваше имя
+                  <input
+                    aria-label="Ваше имя"
+                    maxLength={80}
+                    defaultValue={session.author.name}
+                    onBlur={(event) => session.setAuthorName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur();
+                    }}
+                  />
+                </label>
+                <ul aria-label="Авторы на доске">
+                  {state.authors.map((a) => (
+                    <li key={a.id} style={{ color: a.color }}>
+                      {a.name}
+                      {a.id === state.selfId ? ' (вы)' : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
             <button onClick={() => setSharing(true)}>Поделиться ↗</button>
           </div>
         </header>
@@ -310,6 +375,9 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             selected: edge.id === selectedEdge,
             data: {
               bend: edge.bend,
+              authors: state.authors.filter(
+                (a) => a.id !== state.selfId && a.edgeIds.includes(edge.id),
+              ),
               editable: session.canMove(),
               select: () => setSelectedEdge(edge.id),
               save: (bend: { x: number; y: number } | null) =>
@@ -372,6 +440,30 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           <Background color="#cbd2c8" gap={24} size={1} />
           <MiniMap nodeColor="#85a592" pannable zoomable />
           <Controls showInteractive={false} />
+          <ViewportPortal>
+            {state.authors
+              .filter((a) => a.id !== state.selfId && a.cursor)
+              .map((a) => (
+                <div
+                  key={a.id}
+                  className="remote-cursor"
+                  data-testid="remote-cursor"
+                  style={{
+                    transform: `translate(${a.cursor!.x}px, ${a.cursor!.y}px)`,
+                    color: a.color,
+                  }}
+                >
+                  <svg width="16" height="20" viewBox="0 0 16 20" aria-hidden="true">
+                    <path
+                      d="M1 1 L1 16 L5 12 L9 19 L12 17 L8 10 L15 10 Z"
+                      fill="currentColor"
+                      stroke="white"
+                    />
+                  </svg>
+                  <span>{a.name}</span>
+                </div>
+              ))}
+          </ViewportPortal>
         </ReactFlow>
         <div className="canvas-caption">
           ПКМ — добавить ноду · Shift — выделить группу · Двойной клик — текст · Потяните связь —

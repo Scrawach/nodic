@@ -97,7 +97,7 @@ function CharacterRow({
 
 export function Characters({ project: initial }: { project: Project }) {
   const [project, setProject] = useState(initial);
-  const [session] = useState(() => new DialogueSession(initial.dialogues[0].id));
+  const [session] = useState(() => new DialogueSession(initial.dialogues[0].id, false));
   const live = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [name, setName] = useState('');
   const [color, setColor] = useState(characterColors[0]);

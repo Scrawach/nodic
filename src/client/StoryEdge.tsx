@@ -4,6 +4,7 @@ import { BaseEdge, getBezierPath, useReactFlow, type Edge, type EdgeProps } from
 type Point = { x: number; y: number };
 export type StoryEdgeData = {
   bend: Point | null;
+  authors?: { name: string; color: string }[];
   editable: boolean;
   select: () => void;
   save: (bend: Point | null) => void;
@@ -85,6 +86,18 @@ export function StoryEdge(props: EdgeProps<Edge<StoryEdgeData>>) {
         if (data?.editable) data.save(null);
       }}
     >
+      {!!data?.authors?.length && (
+        <text
+          data-testid="remote-edge-selection"
+          x={(sourceX + targetX) / 2}
+          y={(sourceY + targetY) / 2 - 12}
+          fill={data.authors[0].color}
+          fontSize="13"
+          pointerEvents="none"
+        >
+          {data.authors.map((a) => a.name).join(', ')}
+        </text>
+      )}
       <defs>
         <marker
           id={`nodic-arrow-${id}`}

@@ -774,3 +774,57 @@ input[type='color'] {
 .character-confirm button {
   margin-right: 12px;
 }
+
+.presence-list {
+  position: relative;
+}
+.presence-list summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+.presence-panel {
+  position: absolute;
+  right: 0;
+  top: 28px;
+  z-index: 30;
+  width: 260px;
+  padding: 18px;
+  background: #fffefa;
+  border: 1px solid #d1d7cb;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px #23342820;
+}
+.presence-panel ul {
+  padding-left: 18px;
+  margin-bottom: 0;
+}
+.remote-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: start;
+  z-index: 20;
+}
+.remote-cursor span {
+  background: #fffefa;
+  border: 1px solid currentColor;
+  padding: 2px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.remote-selected {
+  outline: 2px dashed var(--author-color);
+  outline-offset: 4px;
+}
+.remote-selection-label {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 0;
+  color: var(--author-color);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}

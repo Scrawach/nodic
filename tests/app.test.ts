@@ -1516,3 +1516,65 @@ test('project management enforces owner deletion, notifies rooms and rejects lat
     remainingPeer.socket.terminate();
   }
 });
+
+test('board presence is transient, connection-owned and contains only public fields', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Presence' } })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.editorToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  currentDialogue = project.dialogueId;
+  const a = connect(cookie),
+    b = connect(cookie);
+  try {
+    const readyA = await a.next('ready');
+    await b.next('ready');
+    // Drain the initial empty snapshots before announcing presence.
+    await b.next('board-presence');
+    a.send({
+      type: 'board-presence',
+      id: 'forged',
+      name: 'Аня',
+      color: '#123456',
+      cursor: { x: 100, y: 200 },
+      nodeIds: [],
+      edgeIds: [],
+      token: project.editorToken,
+    });
+    let snapshot = await b.next('board-presence');
+    while (!(snapshot.authors as unknown[]).length) snapshot = await b.next('board-presence');
+    expect(snapshot.authors).toEqual([
+      {
+        id: readyA.peerId,
+        name: 'Аня',
+        color: '#123456',
+        cursor: { x: 100, y: 200 },
+        nodeIds: [],
+        edgeIds: [],
+      },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain(project.editorToken);
+    expect(JSON.stringify(snapshot)).not.toContain(cookie);
+    a.socket.terminate();
+    const cleared = await b.next('board-presence');
+    expect(cleared.authors).toEqual([]);
+    b.socket.terminate();
+    await app.close();
+    app = await createApp();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const reopened = connect(cookie);
+    try {
+      await reopened.next('ready');
+      expect((await reopened.next('board-presence')).authors).toEqual([]);
+    } finally {
+      reopened.socket.terminate();
+    }
+  } finally {
+    a.socket.terminate();
+    b.socket.terminate();
+  }
+});

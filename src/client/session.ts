@@ -1,4 +1,6 @@
 import { recoverCreations } from './api';
+import { authorProfile } from './author';
+import type { BoardAuthor } from '../shared/protocol';
 import { leaveRemoved, renameRecent } from './project-events';
 import * as Y from 'yjs';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
@@ -24,6 +26,8 @@ interface SessionState {
   connected: boolean;
   status: string;
   peers: number;
+  authors: BoardAuthor[];
+  selfId: string;
   nodes: DialogueNode[];
   edges: DialogueEdge[];
   projectVersion: number;
@@ -32,6 +36,51 @@ interface SessionState {
 }
 
 export class DialogueSession {
+  readonly author = authorProfile();
+  private presenceTimer?: ReturnType<typeof setTimeout>;
+  private cursor: { x: number; y: number } | null = null;
+  private selectedNodes: string[] = [];
+  private selectedEdges: string[] = [];
+  setAuthorName(name: string) {
+    this.author.name = name.trim().slice(0, 80) || 'Автор';
+    sessionStorage.setItem('nodic-name', this.author.name);
+    this.publishPresence();
+    this.update();
+  }
+  setCursor(cursor: { x: number; y: number } | null) {
+    this.cursor = cursor;
+    this.schedulePresence();
+  }
+  setSelection(nodeIds: string[], edgeIds: string[]) {
+    nodeIds = [...nodeIds].sort();
+    edgeIds = [...edgeIds].sort();
+    if (
+      nodeIds.join() === this.selectedNodes.join() &&
+      edgeIds.join() === this.selectedEdges.join()
+    )
+      return;
+    this.selectedNodes = nodeIds;
+    this.selectedEdges = edgeIds;
+    this.schedulePresence();
+  }
+  private schedulePresence() {
+    if (!this.presenceTimer)
+      this.presenceTimer = setTimeout(() => {
+        this.presenceTimer = undefined;
+        this.publishPresence();
+      }, 50);
+  }
+  private publishPresence() {
+    if (!this.showPresence || !this.state.connected || this.stopped) return;
+    this.send({
+      type: 'board-presence',
+      name: this.author.name,
+      color: this.author.color,
+      cursor: this.cursor,
+      nodeIds: this.selectedNodes,
+      edgeIds: this.selectedEdges,
+    });
+  }
   private socket?: WebSocket;
   private stopped = false;
   private timer?: ReturnType<typeof setTimeout>;
@@ -167,6 +216,8 @@ export class DialogueSession {
     connected: false,
     status: 'Подключение…',
     peers: 0,
+    authors: [],
+    selfId: '',
     nodes: [],
     edges: [],
     projectVersion: 0,
@@ -174,7 +225,10 @@ export class DialogueSession {
     version: 0,
   };
 
-  constructor(private dialogueId: string) {
+  constructor(
+    private dialogueId: string,
+    private showPresence = true,
+  ) {
     let sessionId = sessionStorage.getItem('nodic-tab');
     if (!sessionId) {
       sessionId = crypto.randomUUID();
@@ -189,7 +243,8 @@ export class DialogueSession {
   private offline = () => {
     clearTimeout(this.timer);
     for (const handle of this.texts.values()) handle.loaded = false;
-    this.update({ connected: false });
+    this.cursor = null;
+    this.update({ connected: false, authors: [] });
     this.status();
     this.socket?.close();
   };
@@ -270,10 +325,12 @@ export class DialogueSession {
         this.sentMove = undefined;
         this.update({
           connected: true,
+          selfId: message.peerId || '',
           nodes: message.nodes || [],
           edges: message.edges || [],
           projectVersion: this.state.projectVersion + 1,
         });
+        this.publishPresence();
         this.flushMove();
         for (const nodeId of this.texts.keys()) {
           if (this.state.nodes.some((n) => n.id === nodeId))
@@ -288,6 +345,8 @@ export class DialogueSession {
                 this.send(pending);
         }
         this.status();
+      } else if (message.type === 'board-presence') {
+        this.update({ authors: message.authors });
       } else if (message.type === 'removed') {
         this.destroy();
         void leaveRemoved(message.projectId, message.dialogueIds, message.projectDeleted);
@@ -378,7 +437,8 @@ export class DialogueSession {
     socket.onclose = () => {
       if (socket !== this.socket || this.stopped) return;
       for (const handle of this.texts.values()) handle.loaded = false;
-      this.update({ connected: false });
+      this.cursor = null;
+      this.update({ connected: false, authors: [] });
       this.status();
       if (navigator.onLine) this.timer = setTimeout(() => this.connect(), 1500);
     };
@@ -488,6 +548,7 @@ export class DialogueSession {
   }
   destroy() {
     this.stopped = true;
+    clearTimeout(this.presenceTimer);
     window.removeEventListener('keydown', this.historyKey, true);
     window.removeEventListener('offline', this.offline);
     window.removeEventListener('online', this.online);
