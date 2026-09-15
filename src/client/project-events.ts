@@ -1,5 +1,24 @@
 import { entries, del, update } from 'idb-keyval';
 
+// Only a server receipt authenticated by this project's original session is
+// evidence of deletion. Network failures and denied/expired access retain data.
+export async function checkRemoved(dialogueId?: string) {
+  const projectId = location.pathname.match(/^\/p\/([^/]+)/)?.[1];
+  if (!projectId) return false;
+  try {
+    const response = await fetch(`/api/projects/${projectId}/removals`);
+    if (!response.ok) return false;
+    const receipt = await response.json();
+    if (receipt.projectDeleted || (dialogueId && receipt.dialogueIds.includes(dialogueId))) {
+      await leaveRemoved(projectId, receipt.dialogueIds, receipt.projectDeleted);
+      return true;
+    }
+  } catch {
+    // Preserve the outbox until authoritative recovery is possible.
+  }
+  return false;
+}
+
 export function renameRecent(projectId: string, name: string) {
   try {
     const recent = JSON.parse(localStorage.getItem('nodic-projects') || '[]');

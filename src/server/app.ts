@@ -10,7 +10,7 @@ import { cookieName, createProject, grantAccess, requireDialogue, requireProject
 import { registerLive } from './live';
 import { readGraph } from './graph';
 import { characterColors } from '../shared/model';
-import { AccessError, dialogueActor } from './access';
+import { AccessError, dialogueActor, hash } from './access';
 import { createOnce } from './creation';
 
 export async function createApp(options: { databaseUrl?: string; publicOrigin?: string } = {}) {
@@ -38,6 +38,21 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
     return { status: 'ok' };
   });
   const live = registerLive(app, pool);
+  app.get('/api/projects/:projectId/removals', async (request) => {
+    const { projectId } = z.object({ projectId: z.uuid() }).parse(request.params);
+    const token = request.cookies[cookieName(projectId)];
+    if (!token) throw new AccessError('Откройте проект по ссылке приглашения.');
+    const receipts = await pool.query(
+      'SELECT dialogue_id AS "dialogueId", project_deleted AS "projectDeleted" FROM removal_receipts WHERE project_id=$1 AND session_hash=$2 AND expires_at > now()',
+      [projectId, hash(token)],
+    );
+    if (!receipts.rows.length) await requireProject(pool, request, projectId);
+    return {
+      projectId,
+      dialogueIds: receipts.rows.map((r) => r.dialogueId),
+      projectDeleted: receipts.rows.some((r) => r.projectDeleted),
+    };
+  });
   app.post('/api/projects', async (request, reply) => {
     const { name } = z.object({ name: z.string().trim().min(1).max(120) }).parse(request.body);
     return reply.code(201).send(await createProject(pool, name));
@@ -110,6 +125,10 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
           { statusCode: 409 },
         );
       await client.query('DELETE FROM edges WHERE dialogue_id=$1', [dialogueId]);
+      await client.query(
+        'INSERT INTO removal_receipts SELECT hash,project_id,$2,false,expires_at FROM project_sessions WHERE project_id=$1 AND expires_at > now() ON CONFLICT DO NOTHING',
+        [projectId, dialogueId],
+      );
       await client.query('DELETE FROM dialogues WHERE id=$1', [dialogueId]);
       await client.query('DELETE FROM creation_operations WHERE scope=$1', [
         'dialogue:' + dialogueId + ':nodes',
@@ -131,6 +150,14 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
         [projectId],
       );
       const ids = dialogues.rows.map((d) => d.id);
+      await client.query('DELETE FROM removal_receipts WHERE expires_at <= now()');
+      await client.query('UPDATE removal_receipts SET project_deleted=true WHERE project_id=$1', [
+        projectId,
+      ]);
+      await client.query(
+        'INSERT INTO removal_receipts SELECT s.hash,s.project_id,d.id,true,s.expires_at FROM project_sessions s JOIN dialogues d ON d.project_id=s.project_id WHERE s.project_id=$1 AND s.expires_at > now() ON CONFLICT (session_hash,project_id,dialogue_id) DO UPDATE SET project_deleted=true',
+        [projectId],
+      );
       await client.query('DELETE FROM edges WHERE dialogue_id=ANY($1::uuid[])', [ids]);
       await client.query('DELETE FROM projects WHERE id=$1', [projectId]);
       await client.query('DELETE FROM creation_operations WHERE scope=ANY($1::text[])', [

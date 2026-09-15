@@ -1,4 +1,5 @@
 import { get, update } from 'idb-keyval';
+import { checkRemoved } from './project-events';
 
 type Creation = { id: string; path: string; body: string; tab: string };
 function currentTab() {
@@ -102,6 +103,8 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
     return (await deliver(item)) as T;
   }
   if (body === undefined && /^\/(projects|dialogues)\/[^/]+$/.test(path)) {
+    if (await checkRemoved(path.startsWith('/dialogues/') ? path.split('/')[2] : undefined))
+      throw new Error('Объект удалён владельцем.');
     await recoverCreations(path);
   }
   return request<T>(path, body === undefined ? undefined : JSON.stringify(body));

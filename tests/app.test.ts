@@ -1517,6 +1517,60 @@ test('project management enforces owner deletion, notifies rooms and rejects lat
   }
 });
 
+test('offline deletion receipts are session-scoped and survive project deletion and restart', async () => {
+  const project = (
+    await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'Offline deletion' },
+    })
+  ).json();
+  const access = async (token: string) => {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/access`,
+      payload: { token },
+    });
+    return response.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  };
+  const owner = await access(project.ownerToken),
+    editor = await access(project.editorToken);
+  const post = (url: string, payload: Record<string, unknown> = {}) =>
+    app.inject({ method: 'POST', url, headers: { cookie: owner }, payload });
+  const receipt = (id = project.id, cookie = editor) =>
+    app.inject({ url: `/api/projects/${id}/removals`, headers: { cookie } });
+  expect((await receipt()).json()).toEqual({
+    projectId: project.id,
+    dialogueIds: [],
+    projectDeleted: false,
+  });
+  const second = (
+    await post(`/api/projects/${project.id}/dialogues`, { name: 'Deleted offline' })
+  ).json();
+  expect((await post(`/api/dialogues/${second.id}/delete`)).statusCode).toBe(200);
+  expect((await receipt()).json()).toEqual({
+    projectId: project.id,
+    dialogueIds: [second.id],
+    projectDeleted: false,
+  });
+  expect((await receipt(project.id, '')).statusCode).toBe(403);
+  expect((await receipt(project.id, `nodic_${project.id}=invented`)).statusCode).toBe(403);
+  expect((await receipt(crypto.randomUUID())).statusCode).toBe(403);
+  const freshEditor = await access(project.editorToken);
+  expect((await receipt(project.id, freshEditor)).json().dialogueIds).toEqual([]);
+  expect((await post(`/api/projects/${project.id}/delete`)).statusCode).toBe(200);
+  await app.close();
+  app = await createApp();
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  expect((await receipt()).json()).toEqual({
+    projectId: project.id,
+    dialogueIds: expect.arrayContaining([second.id, project.dialogueId]),
+    projectDeleted: true,
+  });
+  expect((await receipt(project.id, '')).statusCode).toBe(403);
+  expect((await receipt(project.id, `nodic_${project.id}=invented`)).statusCode).toBe(403);
+});
+
 test('board presence is transient, connection-owned and contains only public fields', async () => {
   const project = (
     await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Presence' } })

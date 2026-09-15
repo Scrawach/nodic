@@ -7,6 +7,14 @@ export async function openDatabase(
   connectionString = process.env.DATABASE_URL || defaultDatabaseUrl,
 ) {
   const pool = new pg.Pool({ connectionString, max: 10 });
+  // Idle connections can fail while PostgreSQL restarts. pg removes the client;
+  // an error listener keeps that recoverable outage from crashing the process.
+  const connectionError = () =>
+    console.error('PostgreSQL connection lost; pending operations require retry.');
+  pool.on('error', connectionError);
+  // Checked-out clients have no pool error listener between queries (including
+  // while a COMMIT response is lost). Queries still reject on connection failure.
+  pool.on('connect', (client) => client.on('error', connectionError));
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -31,6 +39,9 @@ export async function openDatabase(
     );
     await client.query(
       await readFile(new URL('./migrations/007-deleted-characters.sql', import.meta.url), 'utf8'),
+    );
+    await client.query(
+      await readFile(new URL('./migrations/008-removal-receipts.sql', import.meta.url), 'utf8'),
     );
     await client.query('COMMIT');
   } catch (error) {

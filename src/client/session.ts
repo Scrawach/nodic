@@ -1,7 +1,7 @@
 import { recoverCreations } from './api';
 import { authorProfile } from './author';
 import type { BoardAuthor } from '../shared/protocol';
-import { leaveRemoved, renameRecent } from './project-events';
+import { checkRemoved, leaveRemoved, renameRecent } from './project-events';
 import * as Y from 'yjs';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { entries, set, del } from 'idb-keyval';
@@ -250,7 +250,12 @@ export class DialogueSession {
   };
   private online = () => {
     clearTimeout(this.timer);
-    if (!this.stopped && this.socket?.readyState !== WebSocket.OPEN) this.connect();
+    if (
+      !this.stopped &&
+      this.socket?.readyState !== WebSocket.OPEN &&
+      this.socket?.readyState !== WebSocket.CONNECTING
+    )
+      this.connect();
   };
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -276,6 +281,7 @@ export class DialogueSession {
   }
   private async initialize() {
     try {
+      if (await checkRemoved(this.dialogueId)) return;
       const stored = (await entries<string, Pending>()).filter(([key]) =>
         key.startsWith(this.outboxPrefix),
       );
@@ -434,12 +440,17 @@ export class DialogueSession {
         }
       }
     };
-    socket.onclose = () => {
+    socket.onclose = async () => {
       if (socket !== this.socket || this.stopped) return;
       for (const handle of this.texts.values()) handle.loaded = false;
       this.cursor = null;
       this.update({ connected: false, authors: [] });
       this.status();
+      if (navigator.onLine && (await checkRemoved(this.dialogueId))) {
+        this.destroy();
+        return;
+      }
+      if (this.stopped || socket !== this.socket) return;
       if (navigator.onLine) this.timer = setTimeout(() => this.connect(), 1500);
     };
     socket.onerror = () => socket.close();
