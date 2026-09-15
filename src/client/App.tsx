@@ -482,8 +482,8 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
             setMenu({ x: event.clientX, y: event.clientY });
           }}
         >
-          <Background color="#cbd2c8" gap={24} size={1} />
-          <MiniMap nodeColor="#85a592" pannable zoomable />
+          <Background color="#343437" gap={24} size={1} />
+          <MiniMap nodeColor="#9b9b9c" pannable zoomable />
           <Controls showInteractive={false} />
           <ViewportPortal>
             {state.authors

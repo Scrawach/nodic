@@ -53,9 +53,10 @@ for (const projectDeleted of [false, true]) {
         return route.abort();
       });
       await other.getByRole('button', { name: 'Закрыть', exact: true }).click();
+      // Keep the pane action away from the reply after its text changes its height.
       await other
         .locator('.react-flow__pane')
-        .click({ button: 'right', position: { x: 550, y: 300 } });
+        .click({ button: 'right', position: { x: 50, y: 200 } });
       await other.getByRole('button', { name: 'Реплика', exact: true }).click();
       await expect.poll(() => creationAttempts).toBe(2);
       await context.setOffline(true);

@@ -109,7 +109,7 @@ export function StoryEdge(props: EdgeProps<Edge<StoryEdgeData>>) {
           orient="auto"
           markerUnits="userSpaceOnUse"
         >
-          <path d="M 0 -3 L 11 0 L 0 3 Z" fill={selected ? '#b16a25' : '#6b8454'} />
+          <path d="M 0 -3 L 11 0 L 0 3 Z" fill={selected ? 'var(--text)' : 'var(--muted)'} />
         </marker>
       </defs>
       <BaseEdge
@@ -117,15 +117,18 @@ export function StoryEdge(props: EdgeProps<Edge<StoryEdgeData>>) {
         path={path}
         markerEnd={`url(#nodic-arrow-${id})`}
         interactionWidth={24}
-        style={{ stroke: selected ? '#b16a25' : '#6b8454', strokeWidth: selected ? 4 : 2.5 }}
+        style={{
+          stroke: selected ? 'var(--text)' : 'var(--muted)',
+          strokeWidth: selected ? 4 : 2.5,
+        }}
       />
       {selected && bend && (
         <circle
           cx={(sourceX + 2 * bend.x + targetX) / 4}
           cy={(sourceY + 2 * bend.y + targetY) / 4}
           r={5}
-          fill="#fffefa"
-          stroke="#b16a25"
+          fill="var(--panel)"
+          stroke="var(--text)"
           strokeWidth={2}
           pointerEvents="none"
         />

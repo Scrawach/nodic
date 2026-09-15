@@ -755,7 +755,8 @@ test('selected nodes delete together and undo together while start stays protect
     await page.getByRole('button', { name: 'Отменить', exact: true }).click();
     await expect(other.getByTestId('node-line')).toHaveCount(1);
     await expect(other.getByTestId('node-choice')).toHaveCount(1);
-    await page.getByTestId('node-line').click();
+    // Restoration may place the start above the reply's centre in stacking order.
+    await page.getByTestId('node-line').click({ position: { x: 20, y: 20 } });
     await page.getByTestId('node-choice').click({ modifiers: ['Shift'] });
     await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
     await page.keyboard.press('Delete');
@@ -809,7 +810,8 @@ test('a branch copies between dialogues and undo removes the whole independent p
   const other = await context.newPage();
   try {
     await other.goto(invitation);
-    await other.getByTestId('node-line').dblclick();
+    // The start node can overlap the reply's centre; use its visible heading.
+    await other.getByTestId('node-line').dblclick({ position: { x: 20, y: 20 } });
     await other.getByRole('textbox', { name: 'Текст реплики' }).fill('Изменён исходник');
     await expect(page.getByTestId('node-line').locator('p')).toHaveText('Изменён исходник');
     await page.getByRole('button', { name: 'Новый диалог' }).click();
