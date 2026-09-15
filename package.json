@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "profile:load": "node scripts/profile-load.mjs",
     "build": "tsc --noEmit && vite build",
     "start": "tsx src/server/main.ts"
   },
