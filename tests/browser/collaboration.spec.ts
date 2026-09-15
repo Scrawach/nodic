@@ -920,3 +920,89 @@ test('the character catalogue updates authors in different dialogues and preserv
     await context.close();
   }
 });
+
+test('owners delete open dialogues and projects while editors can rename and are redirected', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Before management');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const invitation = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const originalPath = new URL(page.url()).pathname;
+  const directoryPath = await page
+    .getByRole('link', { name: 'Персонажи', exact: true })
+    .getAttribute('href');
+  const directory = await page.context().newPage();
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await directory.goto(directoryPath!);
+    await expect(directory.getByRole('heading', { name: 'Персонажи', exact: true })).toBeVisible();
+    await other.goto(invitation);
+    await other.getByRole('link', { name: 'Первый диалог' }).click();
+    await other.getByRole('button', { name: 'Управление проектом', exact: true }).click();
+    const editorDialog = other.getByRole('dialog', { name: 'Управление проектом' });
+    await expect(
+      editorDialog.getByRole('button', { name: 'Удалить проект', exact: true }),
+    ).toHaveCount(0);
+    await editorDialog.getByLabel('Название проекта', { exact: true }).fill('After management');
+    await editorDialog.getByRole('button', { name: 'Переименовать проект', exact: true }).click();
+    await expect(
+      page.getByRole('heading', { name: 'After management', exact: true }),
+    ).toBeVisible();
+    await editorDialog.getByLabel('Название диалога', { exact: true }).fill('Удаляемый диалог');
+    await editorDialog.getByRole('button', { name: 'Переименовать диалог', exact: true }).click();
+    await expect(page.getByRole('link', { name: 'Удаляемый диалог' })).toBeVisible();
+    await editorDialog.getByRole('button', { name: 'Закрыть', exact: true }).click();
+    await other
+      .locator('.react-flow__pane')
+      .click({ button: 'right', position: { x: 400, y: 280 } });
+    await other.getByRole('button', { name: 'Реплика', exact: true }).click();
+    await other.getByTestId('node-line').dblclick();
+    await other.getByRole('textbox', { name: 'Текст реплики' }).fill('Открытый текст');
+    await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
+    await page.getByRole('button', { name: 'Новый диалог' }).click();
+    await page
+      .getByRole('dialog', { name: 'Новый диалог' })
+      .getByRole('textbox')
+      .fill('Оставшийся диалог');
+    await page.getByRole('button', { name: 'Создать диалог', exact: true }).click();
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+    await page.goto(originalPath);
+    await page.getByRole('button', { name: 'Управление проектом', exact: true }).click();
+    const ownerDialog = page.getByRole('dialog', { name: 'Управление проектом' });
+    await ownerDialog.getByRole('button', { name: 'Удалить диалог', exact: true }).click();
+    await ownerDialog.getByRole('button', { name: 'Подтвердить удаление', exact: true }).click();
+    for (const p of [page, other]) {
+      await expect(p.getByRole('alert')).toContainText('Диалог удалён владельцем');
+      await expect(p.getByRole('textbox', { name: 'Текст реплики' })).toHaveCount(0);
+      await expect(p.getByRole('link', { name: 'Оставшийся диалог' })).toBeVisible();
+      await expect(p.getByRole('link', { name: 'Удаляемый диалог' })).toHaveCount(0);
+    }
+    await expect(directory.getByRole('heading', { name: 'Персонажи', exact: true })).toBeVisible();
+    await expect(
+      directory.getByRole('button', { name: 'Создать персонажа', exact: true }),
+    ).toBeDisabled();
+    await directory.getByLabel('Имя нового персонажа').fill('После удаления диалога');
+    await expect(
+      directory.getByRole('button', { name: 'Создать персонажа', exact: true }),
+    ).toBeEnabled();
+    await page.getByRole('button', { name: 'Управление проектом', exact: true }).click();
+    await expect(
+      ownerDialog.getByRole('button', { name: 'Удалить диалог', exact: true }),
+    ).toBeDisabled();
+    await ownerDialog.getByRole('button', { name: 'Удалить проект', exact: true }).click();
+    await ownerDialog.getByRole('button', { name: 'Подтвердить удаление', exact: true }).click();
+    for (const p of [page, other, directory]) {
+      await expect(p).toHaveURL('http://127.0.0.1:5173/');
+      await expect(p.getByRole('alert')).toContainText('Проект удалён владельцем');
+      await expect(p.getByRole('link').filter({ hasText: 'After management' })).toHaveCount(0);
+    }
+  } finally {
+    await directory.close();
+    await context.close();
+  }
+});

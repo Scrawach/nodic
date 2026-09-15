@@ -71,6 +71,80 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
     );
     return { ...result.rows[0], role, dialogues: dialogues.rows, characters: characters.rows };
   });
+  app.post('/api/projects/:projectId/rename', async (request) => {
+    const { projectId } = z.object({ projectId: z.uuid() }).parse(request.params);
+    await requireProject(pool, request, projectId);
+    const { name } = z.object({ name: z.string().trim().min(1).max(120) }).parse(request.body);
+    await pool.query('UPDATE projects SET name=$2 WHERE id=$1', [projectId, name]);
+    await live.notifyProject(projectId);
+    return { id: projectId, name };
+  });
+  app.post('/api/dialogues/:dialogueId/rename', async (request) => {
+    const { dialogueId } = z.object({ dialogueId: z.uuid() }).parse(request.params);
+    await requireDialogue(pool, request, dialogueId);
+    const { name } = z.object({ name: z.string().trim().min(1).max(120) }).parse(request.body);
+    const result = await pool.query(
+      'UPDATE dialogues SET name=$2 WHERE id=$1 RETURNING project_id',
+      [dialogueId, name],
+    );
+    if (!result.rows[0]) throw new AccessError('Диалог удалён.');
+    await live.notifyProject(result.rows[0].project_id);
+    return { id: dialogueId, name };
+  });
+  app.post('/api/dialogues/:dialogueId/delete', async (request) => {
+    const { dialogueId } = z.object({ dialogueId: z.uuid() }).parse(request.params);
+    if ((await requireDialogue(pool, request, dialogueId)) !== 'owner')
+      throw new AccessError('Удалять диалог может только владелец.');
+    const found = await pool.query('SELECT project_id FROM dialogues WHERE id=$1', [dialogueId]);
+    if (!found.rows[0]) throw new AccessError('Диалог удалён.');
+    const projectId = found.rows[0].project_id;
+    await transaction(pool, async (client) => {
+      await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId]);
+      const dialogues = await client.query(
+        'SELECT id FROM dialogues WHERE project_id=$1 ORDER BY id FOR UPDATE',
+        [projectId],
+      );
+      if (dialogues.rows.length <= 1)
+        throw Object.assign(
+          new Error('Последний диалог удалить нельзя. Можно удалить проект целиком.'),
+          { statusCode: 409 },
+        );
+      await client.query('DELETE FROM edges WHERE dialogue_id=$1', [dialogueId]);
+      await client.query('DELETE FROM dialogues WHERE id=$1', [dialogueId]);
+      await client.query('DELETE FROM creation_operations WHERE scope=$1', [
+        'dialogue:' + dialogueId + ':nodes',
+      ]);
+      // Keep the creation receipt: replay must not recreate a deleted dialogue.
+    });
+    await live.notifyRemoved(projectId, [dialogueId], false);
+    await live.notifyProject(projectId);
+    return { deleted: true };
+  });
+  app.post('/api/projects/:projectId/delete', async (request) => {
+    const { projectId } = z.object({ projectId: z.uuid() }).parse(request.params);
+    if ((await requireProject(pool, request, projectId)) !== 'owner')
+      throw new AccessError('Удалять проект может только владелец.');
+    const dialogueIds = await transaction(pool, async (client) => {
+      await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId]);
+      const dialogues = await client.query(
+        'SELECT id FROM dialogues WHERE project_id=$1 ORDER BY id FOR UPDATE',
+        [projectId],
+      );
+      const ids = dialogues.rows.map((d) => d.id);
+      await client.query('DELETE FROM edges WHERE dialogue_id=ANY($1::uuid[])', [ids]);
+      await client.query('DELETE FROM projects WHERE id=$1', [projectId]);
+      await client.query('DELETE FROM creation_operations WHERE scope=ANY($1::text[])', [
+        [
+          'project:' + projectId + ':dialogues',
+          'project:' + projectId + ':characters',
+          ...ids.map((id: string) => 'dialogue:' + id + ':nodes'),
+        ],
+      ]);
+      return ids;
+    });
+    await live.notifyRemoved(projectId, dialogueIds, true);
+    return { deleted: true };
+  });
   app.get('/api/dialogues/:dialogueId', async (request) => {
     const { dialogueId } = z.object({ dialogueId: z.uuid() }).parse(request.params);
     await requireDialogue(pool, request, dialogueId);
@@ -151,6 +225,7 @@ export async function createApp(options: { databaseUrl?: string; publicOrigin?: 
       operationId,
       { name },
       async (client) => {
+        await client.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [projectId]);
         await client.query('INSERT INTO dialogues(id,project_id,name) VALUES ($1,$2,$3)', [
           dialogue.id,
           projectId,

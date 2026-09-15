@@ -1,4 +1,5 @@
 import { recoverCreations } from './api';
+import { leaveRemoved, renameRecent } from './project-events';
 import * as Y from 'yjs';
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { entries, set, del } from 'idb-keyval';
@@ -287,10 +288,15 @@ export class DialogueSession {
                 this.send(pending);
         }
         this.status();
+      } else if (message.type === 'removed') {
+        this.destroy();
+        void leaveRemoved(message.projectId, message.dialogueIds, message.projectDeleted);
       } else if (message.type === 'peers') this.update({ peers: message.count });
-      else if (message.type === 'project-changed')
+      else if (message.type === 'project-changed') {
+        if (message.projectId && message.projectName)
+          renameRecent(message.projectId, message.projectName);
         this.update({ projectVersion: this.state.projectVersion + 1 });
-      else if (message.type === 'graph')
+      } else if (message.type === 'graph')
         this.update({ nodes: message.nodes, edges: message.edges });
       else if (message.type === 'positions')
         this.update({

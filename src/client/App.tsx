@@ -19,6 +19,8 @@ import type { GraphFragment } from '../shared/protocol';
 import { DialogueSession } from './session';
 import { TextEditor } from './TextEditor';
 import { Characters } from './Characters';
+import { takeNotice } from './project-events';
+import { ManageProject } from './ManageProject';
 import { StoryEdge } from './StoryEdge';
 import type { DialogueNode, Project, NodeKind } from '../shared/model';
 import './style.css';
@@ -99,6 +101,7 @@ const icons: Record<NodeKind, string> = { start: '↗', line: '≋', choice: '�
 function Board({ project: initialProject, dialogueId }: { project: Project; dialogueId: string }) {
   const [project, setProject] = useState(initialProject);
   const [newDialogue, setNewDialogue] = useState(false);
+  const [managing, setManaging] = useState(false);
   const [dialogueName, setDialogueName] = useState('');
   const [selectedEdge, setSelectedEdge] = useState<string>();
   const [creatingDialogue, setCreatingDialogue] = useState(false);
@@ -106,7 +109,7 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [editor, setEditor] = useState<string>();
   const [sharing, setSharing] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(takeNotice);
   const [menu, setMenu] = useState<{ x: number; y: number; nodeId?: string; edgeId?: string }>();
   const flow = useReactFlow();
   const [boardNodes, setBoardNodes] = useState<
@@ -208,7 +211,7 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
     <div
       className="workspace"
       onKeyDown={(event) => {
-        if (editor || sharing || newDialogue) return;
+        if (editor || sharing || newDialogue || managing) return;
         const target = event.target;
         if (
           target instanceof HTMLElement &&
@@ -240,6 +243,7 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
         <div className="project-label">ПРОЕКТ</div>
         <h1>{project.name}</h1>
         <a href={`/p/${project.id}/characters`}>Персонажи</a>
+        <button onClick={() => setManaging(true)}>Управление проектом</button>
         <div className="sidebar-rule" />
         <div className="section-label">
           Диалоги <span>{project.dialogues.length.toString().padStart(2, '0')}</span>
@@ -468,6 +472,14 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           </div>
         )}
       </main>
+      {managing && (
+        <ManageProject
+          project={project}
+          dialogueId={dialogueId}
+          enabled={session.canMove()}
+          close={() => setManaging(false)}
+        />
+      )}
       {editor && (
         <TextEditor
           key={editor}
@@ -582,7 +594,7 @@ export function App() {
   const match = location.pathname.match(/^\/p\/([^/]+)(?:\/d\/([^/]+)|\/(characters))?$/);
   const [project, setProject] = useState<Project>();
   const [name, setName] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => (match ? '' : takeNotice()));
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!match) return;

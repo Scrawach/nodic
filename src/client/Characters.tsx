@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { api } from './api';
+import { takeNotice } from './project-events';
 import { DialogueSession } from './session';
 import { characterColors, type Character, type Project } from '../shared/model';
 
@@ -101,7 +102,7 @@ export function Characters({ project: initial }: { project: Project }) {
   const [name, setName] = useState('');
   const [color, setColor] = useState(characterColors[0]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(takeNotice);
   const refresh = async () => setProject(await api<Project>(`/projects/${initial.id}`));
   useEffect(() => {
     let cancelled = false;

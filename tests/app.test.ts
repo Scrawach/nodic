@@ -1413,3 +1413,106 @@ test('character rename and deletion span dialogues and safely race assignment', 
     b.socket.terminate();
   }
 });
+
+test('project management enforces owner deletion, notifies rooms and rejects late creations', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Managed project' } })
+  ).json();
+  const access = async (token: string) => {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/access`,
+      payload: { token },
+    });
+    return response.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  };
+  const owner = await access(project.ownerToken),
+    editor = await access(project.editorToken);
+  const post = (url: string, cookie: string, payload: Record<string, unknown> = {}, key?: string) =>
+    app.inject({
+      method: 'POST',
+      url,
+      headers: { cookie, ...(key ? { 'idempotency-key': key } : {}) },
+      payload,
+    });
+  const readProject = async () =>
+    (await app.inject({ url: `/api/projects/${project.id}`, headers: { cookie: owner } })).json();
+  expect((await post(`/api/projects/${project.id}/delete`, editor)).statusCode).toBe(403);
+  expect((await post(`/api/dialogues/${project.dialogueId}/delete`, editor)).statusCode).toBe(403);
+  expect((await post(`/api/dialogues/${project.dialogueId}/delete`, owner)).statusCode).toBe(409);
+  const key = crypto.randomUUID();
+  const second = (
+    await post(`/api/projects/${project.id}/dialogues`, owner, { name: 'Second' }, key)
+  ).json();
+  expect(
+    (await post(`/api/projects/${project.id}/rename`, editor, { name: 'Renamed project' }))
+      .statusCode,
+  ).toBe(200);
+  expect(
+    (await post(`/api/dialogues/${second.id}/rename`, editor, { name: 'Renamed dialogue' }))
+      .statusCode,
+  ).toBe(200);
+  expect(await readProject()).toMatchObject({
+    name: 'Renamed project',
+    dialogues: expect.arrayContaining([{ id: second.id, name: 'Renamed dialogue' }]),
+  });
+  const line = (
+    await post(`/api/dialogues/${second.id}/nodes`, owner, { kind: 'line', x: 200, y: 200 })
+  ).json();
+  currentDialogue = second.id;
+  const deletedPeer = connect(editor);
+  currentDialogue = project.dialogueId;
+  const remainingPeer = connect(owner);
+  try {
+    await deletedPeer.next('ready');
+    await remainingPeer.next('ready');
+    deletedPeer.send({ type: 'open-text', nodeId: line.id });
+    await deletedPeer.next('text-state');
+    const doc = new Y.Doc();
+    doc.getText('text').insert(0, 'In flight');
+    deletedPeer.send({
+      type: 'text-update',
+      operationId: crypto.randomUUID(),
+      nodeId: line.id,
+      data: Buffer.from(Y.encodeStateAsUpdate(doc)).toString('base64'),
+    });
+    expect((await post(`/api/dialogues/${second.id}/delete`, owner)).statusCode).toBe(200);
+    expect(await deletedPeer.next('removed')).toMatchObject({
+      projectId: project.id,
+      dialogueIds: [second.id],
+      projectDeleted: false,
+    });
+    doc.destroy();
+    expect((await readProject()).dialogues).toHaveLength(1);
+    expect(
+      (await post(`/api/dialogues/${second.id}/nodes`, editor, { kind: 'line', x: 200, y: 200 }))
+        .statusCode,
+    ).toBe(403);
+    // A delayed retry returns its old receipt but never recreates the dialogue.
+    expect(
+      (await post(`/api/projects/${project.id}/dialogues`, owner, { name: 'Second' }, key)).json()
+        .id,
+    ).toBe(second.id);
+    expect((await readProject()).dialogues).toHaveLength(1);
+    expect((await post(`/api/dialogues/${project.dialogueId}/delete`, owner)).statusCode).toBe(409);
+    expect((await post(`/api/projects/${project.id}/delete`, owner)).statusCode).toBe(200);
+    expect(await remainingPeer.next('removed')).toMatchObject({
+      projectId: project.id,
+      projectDeleted: true,
+    });
+    expect(
+      (await app.inject({ url: `/api/projects/${project.id}`, headers: { cookie: owner } }))
+        .statusCode,
+    ).toBe(403);
+    expect(
+      (await post(`/api/projects/${project.id}/dialogues`, owner, { name: 'Second' }, key))
+        .statusCode,
+    ).toBe(403);
+    expect(
+      (await post(`/api/projects/${project.id}/characters`, editor, { name: 'Late' })).statusCode,
+    ).toBe(403);
+  } finally {
+    deletedPeer.socket.terminate();
+    remainingPeer.socket.terminate();
+  }
+});

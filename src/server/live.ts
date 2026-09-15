@@ -297,7 +297,17 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
     presence.clear();
   });
   return {
+    notifyRemoved: async (projectId: string, dialogueIds: string[], projectDeleted: boolean) => {
+      for (const dialogueId of dialogueIds)
+        await enqueue(dialogueId, async () => {
+          for (const peer of rooms.get(dialogueId) || []) {
+            send(peer.socket, { type: 'removed', projectId, dialogueIds, projectDeleted });
+            peer.socket.close(1000, 'Removed');
+          }
+        });
+    },
     notifyProject: async (projectId: string, graphChanged = false) => {
+      const project = await pool.query('SELECT name FROM projects WHERE id=$1', [projectId]);
       const dialogues = await pool.query('SELECT id FROM dialogues WHERE project_id=$1', [
         projectId,
       ]);
@@ -305,7 +315,11 @@ export function registerLive(app: FastifyInstance, pool: pg.Pool) {
         await enqueue(dialogue.id, async () => {
           if (graphChanged)
             broadcast(dialogue.id, { type: 'graph', ...(await readGraph(pool, dialogue.id)) });
-          broadcast(dialogue.id, { type: 'project-changed' });
+          broadcast(dialogue.id, {
+            type: 'project-changed',
+            projectId,
+            projectName: project.rows[0]?.name,
+          });
         });
     },
     createNode: (dialogueId: string, node: DialogueNode, actor: string, operationId?: string) =>
