@@ -19,7 +19,7 @@ import { storeFragment, pastedFragment } from './clipboard';
 import type { GraphFragment } from '../shared/protocol';
 import { DialogueSession } from './session';
 import { TextEditor } from './TextEditor';
-import { Characters } from './Characters';
+import { Characters, CharacterCreate, CharacterRow } from './Characters';
 import { takeNotice } from './project-events';
 import { ManageProject } from './ManageProject';
 import { StoryEdge } from './StoryEdge';
@@ -117,6 +117,7 @@ const icons: Record<NodeKind, string> = { start: '↗', line: '≋', choice: '�
 function Board({ project: initialProject, dialogueId }: { project: Project; dialogueId: string }) {
   const [project, setProject] = useState(initialProject);
   const [newDialogue, setNewDialogue] = useState(false);
+  const [characterEditor, setCharacterEditor] = useState<string>();
   const [managing, setManaging] = useState(false);
   const [dialogueName, setDialogueName] = useState('');
   const [selectedEdge, setSelectedEdge] = useState<string>();
@@ -176,6 +177,20 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
     }
   }, [editor, state.nodes, state.connected]);
   useEffect(() => () => session.destroy(), [session]);
+  useEffect(() => {
+    if (
+      characterEditor &&
+      characterEditor !== 'new' &&
+      !project.characters.some((character) => character.id === characterEditor)
+    ) {
+      setCharacterEditor(undefined);
+      setError('Персонаж удалён. Редактор закрыт.');
+    }
+  }, [characterEditor, project.characters]);
+  const refreshProject = async () => setProject(await api<Project>(`/projects/${project.id}`));
+  const selectedCharacter = project.characters.find(
+    (character) => character.id === characterEditor,
+  );
   const add = async (kind: Exclude<NodeKind, 'start'>, point?: { x: number; y: number }) => {
     if (!session.canMove()) return;
     const position = flow.screenToFlowPosition(point || { x: innerWidth / 2, y: innerHeight / 2 });
@@ -239,7 +254,7 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
     <div
       className="workspace"
       onKeyDown={(event) => {
-        if (editor || sharing || newDialogue || managing) return;
+        if (editor || sharing || newDialogue || managing || characterEditor) return;
         const target = event.target;
         if (
           target instanceof HTMLElement &&
@@ -270,8 +285,38 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
         </a>
         <div className="project-label">ПРОЕКТ</div>
         <h1>{project.name}</h1>
-        <a href={`/p/${project.id}/characters`}>Персонажи</a>
         <button onClick={() => setManaging(true)}>Управление проектом</button>
+        <div className="sidebar-rule" />
+        <section aria-label="Персонажи проекта">
+          <div className="section-label">
+            <a href={`/p/${project.id}/characters`}>Персонажи</a>
+            <span>{project.characters.length.toString().padStart(2, '0')}</span>
+          </div>
+          {!project.characters.length && <p className="sidebar-empty">Персонажей пока нет</p>}
+          {project.characters.map((character) => (
+            <button
+              key={character.id}
+              className={`dialogue-link character-link ${character.id === characterEditor ? 'active' : ''}`}
+              aria-pressed={character.id === characterEditor}
+              onClick={() => setCharacterEditor(character.id)}
+            >
+              <span
+                className="character-swatch"
+                style={{ backgroundColor: character.color }}
+                aria-label={`Цвет ${character.color}`}
+                role="img"
+              />
+              <span>{character.name}</span>
+            </button>
+          ))}
+          <button
+            className="new-dialogue"
+            disabled={!state.connected}
+            onClick={() => setCharacterEditor('new')}
+          >
+            ＋ Новый персонаж
+          </button>
+        </section>
         <div className="sidebar-rule" />
         <div className="section-label">
           Диалоги <span>{project.dialogues.length.toString().padStart(2, '0')}</span>
@@ -564,6 +609,46 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           </div>
         )}
       </main>
+      {characterEditor && (
+        <div className="modal-backdrop">
+          <section
+            className="modal character-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={characterEditor === 'new' ? 'Новый персонаж' : 'Редактирование персонажа'}
+          >
+            <div className="modal-heading">
+              <h2>{selectedCharacter?.name || 'Новый персонаж'}</h2>
+              <button
+                className="icon-button"
+                aria-label="Закрыть"
+                onClick={() => setCharacterEditor(undefined)}
+              >
+                ×
+              </button>
+            </div>
+            {!state.connected && <p role="status">Нет соединения. Изменения приостановлены.</p>}
+            {selectedCharacter ? (
+              <CharacterRow
+                key={selectedCharacter.id}
+                character={selectedCharacter}
+                projectId={project.id}
+                enabled={state.connected}
+                refresh={refreshProject}
+              />
+            ) : characterEditor === 'new' ? (
+              <CharacterCreate
+                projectId={project.id}
+                enabled={state.connected}
+                created={async () => {
+                  await refreshProject();
+                  setCharacterEditor(undefined);
+                }}
+              />
+            ) : null}
+          </section>
+        </div>
+      )}
       {managing && (
         <ManageProject
           project={project}

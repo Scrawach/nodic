@@ -258,6 +258,7 @@ label input {
   border-right: 1px solid #dde2d7;
   padding: 29px 22px;
   position: relative;
+  overflow-y: auto;
 }
 .sidebar .brand {
   display: block;
@@ -296,6 +297,28 @@ label input {
   padding: 12px 10px;
   font-size: 11px;
   border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.character-link {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-weight: inherit;
+}
+.character-link:hover {
+  background: #f0f3e9;
+}
+.character-swatch {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 1px solid #0003;
+  border-radius: 50%;
+}
+.sidebar-empty {
+  color: #869178;
+  font-size: 11px;
 }
 .dialogue-link.active {
   background: #eaf0df;
@@ -303,8 +326,7 @@ label input {
   font-weight: 700;
 }
 .sidebar-foot {
-  position: absolute;
-  bottom: 25px;
+  margin-top: 40px;
   font-size: 8px;
   color: #969f8c;
   display: flex;
@@ -773,6 +795,18 @@ input[type='color'] {
 }
 .character-confirm button {
   margin-right: 12px;
+}
+.character-modal .character-card {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 0;
+}
+.character-modal .character-create h2 {
+  display: none;
+}
+.character-modal h2 {
+  overflow-wrap: anywhere;
 }
 
 .presence-list {

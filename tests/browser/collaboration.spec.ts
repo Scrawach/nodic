@@ -184,7 +184,7 @@ test('authors connect and shape edges, assign characters, delete nodes and add d
       )
       .toBeLessThan(1);
     await line.dblclick();
-    await page.getByRole('button', { name: 'Новый персонаж' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Новый персонаж' }).click();
     await page.getByLabel('Имя персонажа').fill('Лесник');
     await page.getByRole('button', { name: 'Создать персонажа', exact: true }).click();
     await expect(page.getByLabel('Персонаж', { exact: true }).locator('option:checked')).toHaveText(
@@ -329,7 +329,7 @@ for (const kind of ['dialogues', 'characters'] as const) {
         .click({ button: 'right', position: { x: 400, y: 220 } });
       await page.getByRole('button', { name: 'Реплика', exact: true }).click();
       await page.getByTestId('node-line').dblclick();
-      await page.getByRole('button', { name: 'Новый персонаж' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Новый персонаж' }).click();
       await page.getByLabel('Имя персонажа').fill('Recovered');
     } else {
       await page.getByRole('button', { name: 'Новый диалог' }).click();
@@ -843,6 +843,119 @@ test('a branch copies between dialogues and undo removes the whole independent p
     await expect(other.getByTestId('node-line').locator('p')).toHaveText('Независимая копия');
   } finally {
     await context.close();
+  }
+});
+
+test('sidebar characters can be created and edited by independent authors with project isolation', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Персонажи в проекте');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  const projectId = new URL(page.url()).pathname.split('/')[2];
+  const list = (p: typeof page) => p.getByRole('region', { name: 'Персонажи проекта' });
+  const character = (p: typeof page, name: string) =>
+    list(p).getByRole('button', { name: new RegExp(name) });
+  await expect(list(page).getByText('Персонажей пока нет')).toBeVisible();
+  const charactersBox = await list(page).boundingBox();
+  const dialogueBox = await page.getByRole('link', { name: 'Первый диалог' }).boundingBox();
+  expect(charactersBox!.y + charactersBox!.height).toBeLessThan(dialogueBox!.y);
+  await page.screenshot({ path: 'test-results/character-sidebar-empty.png' });
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const invitation = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  const context = await browser.newContext();
+  const isolatedContext = await browser.newContext();
+  const other = await context.newPage();
+  const isolated = await isolatedContext.newPage();
+  try {
+    await other.goto(invitation);
+    await expect(other.getByTestId('save-status')).toHaveText('Сохранено');
+    await isolated.goto('/');
+    await isolated.getByLabel('Название проекта').fill('Отдельный проект');
+    await isolated.getByRole('button', { name: 'Создать проект', exact: true }).click();
+    await expect(isolated.getByTestId('save-status')).toHaveText('Сохранено');
+    await page.getByRole('button', { name: 'Новый персонаж' }).click();
+    const create = page.getByRole('dialog', { name: 'Новый персонаж', exact: true });
+    await create.getByLabel('Имя нового персонажа').fill('Проводник');
+    await create.getByLabel('Цвет нового персонажа').fill('#123456');
+    await create.getByRole('button', { name: 'Создать персонажа', exact: true }).click();
+    await expect(create).toHaveCount(0);
+    for (const p of [page, other]) {
+      await expect(character(p, 'Проводник')).toBeVisible();
+      await expect(character(p, 'Проводник').getByRole('img')).toHaveCSS(
+        'background-color',
+        'rgb(18, 52, 86)',
+      );
+    }
+    await expect(list(isolated).getByText('Персонажей пока нет')).toBeVisible();
+    const denied = await isolated.request.post(`/api/projects/${projectId}/characters`, {
+      data: { name: 'Чужой', color: '#111111' },
+    });
+    expect(denied.status()).toBe(403);
+    await page.screenshot({ path: 'test-results/character-sidebar-list.png' });
+    await character(page, 'Проводник').click();
+    await character(other, 'Проводник').click();
+    const edit = (p: typeof page) => p.getByRole('dialog', { name: 'Редактирование персонажа' });
+    await edit(other).getByLabel('Имя персонажа', { exact: true }).fill('Наставник');
+    await edit(other).getByRole('button', { name: 'Сохранить имя', exact: true }).click();
+    await expect(edit(page).getByLabel('Имя персонажа', { exact: true })).toHaveValue('Наставник');
+    await edit(other).getByLabel('Цвет персонажа', { exact: true }).fill('#654321');
+    await edit(other).getByRole('button', { name: 'Сохранить цвет', exact: true }).click();
+    await expect(edit(page).getByLabel('Цвет персонажа', { exact: true })).toHaveValue('#654321');
+    for (const p of [page, other]) {
+      await expect(character(p, 'Наставник')).toHaveAttribute('aria-pressed', 'true');
+      await expect(character(p, 'Наставник').getByRole('img')).toHaveCSS(
+        'background-color',
+        'rgb(101, 67, 33)',
+      );
+    }
+    await page.screenshot({ path: 'test-results/character-sidebar-editor.png' });
+    await page.reload();
+    await expect(character(page, 'Наставник')).toBeVisible();
+    await character(page, 'Наставник').click();
+    await edit(other).getByRole('button', { name: 'Удалить персонажа', exact: true }).click();
+    await edit(other).getByRole('button', { name: 'Отмена', exact: true }).click();
+    await expect(character(page, 'Наставник')).toBeVisible();
+    await expect(edit(other).getByRole('button', { name: 'Подтвердить удаление' })).toHaveCount(0);
+    await context.setOffline(true);
+    await expect(edit(other).getByLabel('Имя персонажа', { exact: true })).toBeDisabled();
+    await context.setOffline(false);
+    await expect(edit(other).getByLabel('Имя персонажа', { exact: true })).toBeEnabled();
+    await edit(other).getByRole('button', { name: 'Удалить персонажа', exact: true }).click();
+    await page.screenshot({ path: 'test-results/character-sidebar-open.png' });
+    await other.screenshot({ path: 'test-results/character-sidebar-confirm.png' });
+    await edit(other).getByRole('button', { name: 'Подтвердить удаление', exact: true }).click();
+    for (const p of [page, other]) {
+      await expect(edit(p)).toHaveCount(0);
+      await expect(list(p).getByText('Персонажей пока нет')).toBeVisible();
+    }
+    await expect(list(isolated).getByText('Персонажей пока нет')).toBeVisible();
+    await page.reload();
+    await expect(list(page).getByText('Персонажей пока нет')).toBeVisible();
+    const longName = 'ОченьДлинноеИмяПерсонажа'.repeat(5);
+    for (let index = 0; index < 14; index++) {
+      const response = await page.request.post(`/api/projects/${projectId}/characters`, {
+        data: { name: index === 0 ? longName : `Персонаж ${index}`, color: '#456789' },
+      });
+      expect(response.ok()).toBe(true);
+    }
+    await expect(list(page).getByRole('button')).toHaveCount(15);
+    await character(page, longName).scrollIntoViewIfNeeded();
+    const longBox = await character(page, longName).boundingBox();
+    const sidebarBox = await page.locator('.sidebar').boundingBox();
+    expect(longBox!.x + longBox!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width);
+    await page.screenshot({ path: 'test-results/character-sidebar-long-name.png' });
+    await page.getByRole('link', { name: 'Первый диалог' }).scrollIntoViewIfNeeded();
+    await expect(page.getByRole('button', { name: 'Новый диалог' })).toBeInViewport();
+    await page.screenshot({ path: 'test-results/character-sidebar-scroll.png' });
+    await page.getByRole('button', { name: 'Новый диалог' }).click();
+    await expect(page.getByRole('dialog', { name: 'Новый диалог' })).toBeVisible();
+  } finally {
+    await context.close();
+    await isolatedContext.close();
   }
 });
 

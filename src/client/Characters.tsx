@@ -4,7 +4,7 @@ import { takeNotice } from './project-events';
 import { DialogueSession } from './session';
 import { characterColors, type Character, type Project } from '../shared/model';
 
-function CharacterRow({
+export function CharacterRow({
   character,
   projectId,
   enabled,
@@ -95,13 +95,67 @@ function CharacterRow({
   );
 }
 
+export function CharacterCreate({
+  projectId,
+  enabled,
+  created,
+}: {
+  projectId: string;
+  enabled: boolean;
+  created: () => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [color, setColor] = useState(characterColors[0]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  return (
+    <form
+      className="character-card character-create"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setBusy(true);
+        setError('');
+        void api(`/projects/${projectId}/characters`, { name, color })
+          .then(async () => {
+            setName('');
+            await created();
+          })
+          .catch((e) => setError(String(e)))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <h2>Новый персонаж</h2>
+      <label>
+        Имя нового персонажа
+        <input
+          aria-label="Имя нового персонажа"
+          value={name}
+          maxLength={120}
+          required
+          disabled={!enabled || busy}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </label>
+      <label>
+        Цвет нового персонажа
+        <input
+          aria-label="Цвет нового персонажа"
+          type="color"
+          value={color}
+          disabled={!enabled || busy}
+          onChange={(e) => setColor(e.target.value)}
+        />
+      </label>
+      <button disabled={!enabled || busy || !name.trim()}>Создать персонажа</button>
+      {error && <p role="alert">{error}</p>}
+    </form>
+  );
+}
+
 export function Characters({ project: initial }: { project: Project }) {
   const [project, setProject] = useState(initial);
   const [session] = useState(() => new DialogueSession(initial.dialogues[0].id, false));
   const live = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const [name, setName] = useState('');
-  const [color, setColor] = useState(characterColors[0]);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(takeNotice);
   const refresh = async () => setProject(await api<Project>(`/projects/${initial.id}`));
   useEffect(() => {
@@ -126,45 +180,7 @@ export function Characters({ project: initial }: { project: Project }) {
         <p>{project.name} · Общий справочник проекта</p>
       </header>
       {!live.connected && <p role="status">Нет соединения. Изменения приостановлены.</p>}
-      <form
-        className="character-card character-create"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setBusy(true);
-          setError('');
-          void api(`/projects/${project.id}/characters`, { name, color })
-            .then(async () => {
-              setName('');
-              await refresh();
-            })
-            .catch((e) => setError(String(e)))
-            .finally(() => setBusy(false));
-        }}
-      >
-        <h2>Новый персонаж</h2>
-        <label>
-          Имя нового персонажа
-          <input
-            aria-label="Имя нового персонажа"
-            value={name}
-            maxLength={120}
-            required
-            disabled={!live.connected || busy}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        <label>
-          Цвет нового персонажа
-          <input
-            aria-label="Цвет нового персонажа"
-            type="color"
-            value={color}
-            disabled={!live.connected || busy}
-            onChange={(e) => setColor(e.target.value)}
-          />
-        </label>
-        <button disabled={!live.connected || busy || !name.trim()}>Создать персонажа</button>
-      </form>
+      <CharacterCreate projectId={project.id} enabled={live.connected} created={refresh} />
       {error && <p role="alert">{error}</p>}
       {!project.characters.length && <p>Персонажей пока нет. Создайте первого выше.</p>}
       {project.characters.map((character) => (
