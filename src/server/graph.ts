@@ -63,14 +63,22 @@ export async function applyGraph(
       break;
     }
     case 'delete-node':
-      if (node(command.nodeId).kind === 'start')
-        throw new AccessError('Ноду начала нельзя удалить.');
-      await client.query('DELETE FROM edges WHERE dialogue_id=$1 AND (source=$2 OR target=$2)', [
-        dialogueId,
-        command.nodeId,
-      ]);
-      await client.query('UPDATE nodes SET deleted_at=now() WHERE id=$1', [command.nodeId]);
+    case 'delete-nodes': {
+      const ids = command.type === 'delete-node' ? [command.nodeId] : command.nodeIds;
+      if (new Set(ids).size !== ids.length) throw new AccessError('Нода указана несколько раз.');
+      // Validate the whole selection before touching nodes or incident edges.
+      for (const id of ids)
+        if (node(id).kind === 'start') throw new AccessError('Ноду начала нельзя удалить.');
+      await client.query(
+        'DELETE FROM edges WHERE dialogue_id=$1 AND (source=ANY($2::uuid[]) OR target=ANY($2::uuid[]))',
+        [dialogueId, ids],
+      );
+      await client.query(
+        'UPDATE nodes SET deleted_at=now() WHERE dialogue_id=$1 AND id=ANY($2::uuid[])',
+        [dialogueId, ids],
+      );
       break;
+    }
     case 'delete-edge':
     case 'bend-edge':
       if (!graph.edges.some((e) => e.id === command.edgeId))

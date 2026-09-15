@@ -161,9 +161,38 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
       setError(String(e));
     }
   };
+  const selectedIds = boardNodes
+    .filter((node) => node.selected && node.data.story.kind !== 'start')
+    .map((node) => node.id);
+  const deleteNodes = (nodeIds: string[]) => {
+    if (!nodeIds.length || !session.canMove()) return;
+    session.command({ type: 'delete-nodes', operationId: crypto.randomUUID(), nodeIds });
+    setMenu(undefined);
+  };
+  const menuNodeIds =
+    menu?.nodeId && selectedIds.includes(menu.nodeId)
+      ? selectedIds
+      : menu?.nodeId
+        ? [menu.nodeId]
+        : [];
   const links = recents().find((p) => p.id === project.id);
   return (
-    <div className="workspace">
+    <div
+      className="workspace"
+      onKeyDown={(event) => {
+        if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+        if (editor || sharing) return;
+        const target = event.target;
+        if (
+          target instanceof HTMLElement &&
+          (target.closest('input, textarea, select, button') || target.isContentEditable)
+        )
+          return;
+        if (!selectedIds.length) return;
+        event.preventDefault();
+        deleteNodes(selectedIds);
+      }}
+    >
       <aside className="sidebar">
         <a className="brand" href="/">
           n<span>o</span>dic<span className="brand-dot">.</span>
@@ -274,6 +303,7 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
           nodeTypes={nodeTypes}
           nodesDraggable={session.canMove()}
           deleteKeyCode={null}
+          multiSelectionKeyCode="Shift"
           nodesConnectable={session.canMove()}
           connectionRadius={28}
           zoomOnDoubleClick={false}
@@ -329,15 +359,12 @@ function Board({ project: initialProject, dialogueId }: { project: Project; dial
                   state.nodes.find((n) => n.id === menu.nodeId)?.kind === 'start'
                 }
                 onClick={() => {
-                  session.command({
-                    type: 'delete-node',
-                    operationId: crypto.randomUUID(),
-                    nodeId: menu.nodeId!,
-                  });
-                  setMenu(undefined);
+                  deleteNodes(menuNodeIds);
                 }}
               >
-                ⌫ Удалить ноду
+                {menuNodeIds.length > 1
+                  ? `⌫ Удалить выделенные (${menuNodeIds.length})`
+                  : '⌫ Удалить ноду'}
               </button>
             ) : menu.edgeId ? (
               <>

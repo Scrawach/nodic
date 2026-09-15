@@ -34,6 +34,11 @@ export const graphCommand = z.discriminatedUnion('type', [
   z.object({ type: z.literal('delete-edge'), operationId: z.uuid(), edgeId: z.uuid() }),
   z.object({ type: z.literal('delete-node'), operationId: z.uuid(), nodeId: z.uuid() }),
   z.object({
+    type: z.literal('delete-nodes'),
+    operationId: z.uuid(),
+    nodeIds: z.array(z.uuid()).min(1).max(1000),
+  }),
+  z.object({
     type: z.literal('set-character'),
     operationId: z.uuid(),
     nodeId: z.uuid(),

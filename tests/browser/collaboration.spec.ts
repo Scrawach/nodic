@@ -719,3 +719,51 @@ test('a delayed creation receipt keeps creation before later text in history', a
     release();
   }
 });
+
+test('selected nodes delete together and undo together while start stays protected', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/');
+  await page.getByLabel('Название проекта').fill('Delete selection');
+  await page.getByRole('button', { name: 'Создать проект', exact: true }).click();
+  await page.getByRole('button', { name: 'Поделиться' }).click();
+  const link = await page.getByLabel('Ссылка редактора').inputValue();
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  for (const [x, kind] of [
+    [400, 'Реплика'],
+    [720, 'Вариант'],
+  ] as const) {
+    await page.locator('.react-flow__pane').click({ button: 'right', position: { x, y: 280 } });
+    await page.getByRole('button', { name: kind, exact: true }).click();
+    await expect(page.getByTestId('save-status')).toHaveText('Сохранено');
+  }
+  const context = await browser.newContext();
+  const other = await context.newPage();
+  try {
+    await other.goto(link);
+    await expect(other.getByTestId('node-line')).toHaveCount(1);
+    await page.getByTestId('node-line').click();
+    await page.getByTestId('node-choice').click({ modifiers: ['Shift'] });
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
+    await page.getByTestId('node-choice').click({ button: 'right' });
+    await page.getByRole('button', { name: 'Удалить выделенные (2)' }).click();
+    await expect(other.getByTestId('node-line')).toHaveCount(0);
+    await expect(other.getByTestId('node-choice')).toHaveCount(0);
+    await expect(other.getByTestId('node-start')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Отменить', exact: true }).click();
+    await expect(other.getByTestId('node-line')).toHaveCount(1);
+    await expect(other.getByTestId('node-choice')).toHaveCount(1);
+    await page.getByTestId('node-line').click();
+    await page.getByTestId('node-choice').click({ modifiers: ['Shift'] });
+    await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
+    await page.keyboard.press('Delete');
+    await expect(other.getByTestId('node-line')).toHaveCount(0);
+    await expect(other.getByTestId('node-choice')).toHaveCount(0);
+    await page.getByTestId('node-start').click();
+    await page.keyboard.press('Delete');
+    await expect(other.getByTestId('node-start')).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});

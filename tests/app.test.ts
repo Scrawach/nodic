@@ -1044,3 +1044,71 @@ test('structural history and reversal receipts survive a server restart', async 
     peer.socket.terminate();
   }
 });
+
+test('group deletion is atomic, protects start, and restores its nodes and edges in one step', async () => {
+  const project = (
+    await app.inject({ method: 'POST', url: '/api/projects', payload: { name: 'Delete group' } })
+  ).json();
+  const grant = await app.inject({
+    method: 'POST',
+    url: `/api/projects/${project.id}/access`,
+    payload: { token: project.ownerToken },
+  });
+  const cookie = grant.cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  currentDialogue = project.dialogueId;
+  const read = async () =>
+    (await app.inject({ url: `/api/dialogues/${currentDialogue}`, headers: { cookie } })).json();
+  const start = (await read()).nodes[0];
+  const nodes = [];
+  for (const x of [300, 600])
+    nodes.push(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/dialogues/${currentDialogue}/nodes`,
+          headers: { cookie },
+          payload: { kind: 'line', x, y: 200 },
+        })
+      ).json(),
+    );
+  const peer = connect(cookie);
+  const send = async (command: Record<string, unknown>, outcome = 'saved') => {
+    const operationId = crypto.randomUUID();
+    peer.send({ ...command, operationId });
+    const receipt = await peer.next(outcome);
+    expect(receipt.operationId).toBe(operationId);
+    return operationId;
+  };
+  try {
+    await peer.next('ready');
+    for (const [source, target] of [
+      [start.id, nodes[0].id],
+      [nodes[0].id, nodes[1].id],
+    ]) {
+      await send({ type: 'connect-edge', edgeId: crypto.randomUUID(), source, target });
+    }
+    const initial = await read();
+    for (const ids of [
+      [nodes[0].id, start.id],
+      [nodes[0].id, crypto.randomUUID()],
+      [nodes[0].id, nodes[0].id],
+    ]) {
+      await send({ type: 'delete-nodes', nodeIds: ids }, 'error');
+      expect(await read()).toEqual(initial);
+    }
+    const nodeIds = nodes.map((n) => n.id);
+    const deletion = await send({ type: 'delete-nodes', nodeIds });
+    expect((await read()).nodes.map((n: { id: string }) => n.id)).toEqual([start.id]);
+    expect((await read()).edges).toHaveLength(0);
+    const restoration = await send({ type: 'reverse-graph', targetOperationId: deletion });
+    expect(await read()).toEqual(initial);
+    // A delayed duplicate deletion cannot delete the restored group again.
+    peer.send({ type: 'delete-nodes', operationId: deletion, nodeIds });
+    await peer.next('saved');
+    expect(await read()).toEqual(initial);
+    await send({ type: 'reverse-graph', targetOperationId: restoration });
+    expect((await read()).nodes.map((n: { id: string }) => n.id)).toEqual([start.id]);
+  } finally {
+    peer.socket.terminate();
+  }
+});
